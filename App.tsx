@@ -4,6 +4,7 @@ import { DraftsList } from './components/DraftsList';
 import { CharacterLibrary } from './components/CharacterLibrary';
 import { StoryboardEditor } from './components/StoryboardEditor';
 import { SettingsModal } from './components/SettingsModal';
+import { AuthModal } from './components/AuthModal';
 import { ToastContainer } from './components/Toast';
 import { ViewState, Project, Character, Settings, ToastMessage, GenerationModel } from './types';
 import { storage } from './utils/storage';
@@ -19,12 +20,23 @@ const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [settings, setSettings] = useState<Settings>(storage.getSettings());
+  
+  // Auth State: If apiKeys is empty, user is not authenticated/configured
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
 
   // Initialize from storage
   useEffect(() => {
     setProjects(storage.getProjects());
     setCharacters(storage.getCharacters());
-    setSettings(storage.getSettings());
+    const currentSettings = storage.getSettings();
+    setSettings(currentSettings);
+    
+    // Check if we have valid keys
+    if (currentSettings.apiKeys && currentSettings.apiKeys.length > 0) {
+        setIsAuthenticated(true);
+    } else {
+        setIsAuthenticated(false);
+    }
   }, []);
 
   // Toast Handler
@@ -38,6 +50,14 @@ const App: React.FC = () => {
   };
 
   // Handlers
+  const handleAuthenticated = () => {
+      // Refresh settings to get the key saved by AuthModal
+      const newSettings = storage.getSettings();
+      setSettings(newSettings);
+      setIsAuthenticated(true);
+      showToast("验证通过，欢迎使用", "success");
+  };
+
   const handleCreateProject = async (name: string, srtFile: File | null) => {
     let initialFrames: any[] = [];
     
@@ -81,7 +101,6 @@ const App: React.FC = () => {
   };
 
   const handleDeleteProject = (id: string) => {
-    // Note: The click handling is now safe due to stopPropagation in DraftsList
     if (confirm('确认删除此草稿？')) {
       const updated = projects.filter(p => p.id !== id);
       setProjects(updated);
@@ -113,7 +132,6 @@ const App: React.FC = () => {
   };
 
   const handleDeleteCharacter = (id: string) => {
-    // Note: The click handling is now safe due to stopPropagation in CharacterLibrary
     if (confirm('删除此全局角色？')) {
       handleUpdateCharacters(characters.filter(c => c.id !== id));
       showToast('全局角色已删除', 'info');
@@ -179,7 +197,15 @@ const App: React.FC = () => {
   return (
     <div style={({ '--brand-color': settings.themeColor } as React.CSSProperties)}>
         <ToastContainer toasts={toasts} removeToast={removeToast} />
-        {renderContent()}
+        
+        {/* Gatekeeper Modal */}
+        {!isAuthenticated && <AuthModal onAuthenticated={handleAuthenticated} />}
+
+        {/* Main App (Blurred if not authenticated) */}
+        <div className={!isAuthenticated ? 'filter blur-sm pointer-events-none h-screen overflow-hidden' : ''}>
+            {renderContent()}
+        </div>
+
         <SettingsModal 
             isOpen={isSettingsOpen} 
             onClose={() => setIsSettingsOpen(false)}
@@ -188,6 +214,7 @@ const App: React.FC = () => {
                 setSettings(newSettings);
                 showToast('设置已保存', 'success');
             }}
+            showToast={showToast}
         />
     </div>
   );

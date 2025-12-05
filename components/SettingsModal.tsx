@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Settings, GenerationModel, TEXT_MODELS } from '../types';
 import { Button } from './Button';
-import { X, Save, Activity, Key, Globe, Palette, CreditCard } from 'lucide-react';
+import { X, Save, Palette, Key, Plus, Trash2, Check, AlertTriangle, Loader2 } from 'lucide-react';
 import { storage } from '../utils/storage';
+import { testApiConnection } from '../services/geminiService';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (settings: Settings) => void;
+  showToast: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
 const THEME_COLORS = [
@@ -18,19 +20,69 @@ const THEME_COLORS = [
   { name: '未来青', value: '#06b6d4' },
 ];
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSave }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSave, showToast }) => {
   const [localSettings, setLocalSettings] = useState<Settings>(storage.getSettings());
+  const [newKey, setNewKey] = useState('');
+  const [testingIndex, setTestingIndex] = useState<number | null>(null);
+  const [keyStatuses, setKeyStatuses] = useState<Record<number, 'valid' | 'invalid' | null>>({});
 
   useEffect(() => {
     if (isOpen) {
       setLocalSettings(storage.getSettings());
+      setNewKey('');
+      setKeyStatuses({});
     }
   }, [isOpen]);
 
   const handleSave = () => {
+    // Basic validation
+    if (localSettings.apiKeys.length === 0) {
+        showToast("至少需要一个有效的 API Key", "error");
+        return;
+    }
     storage.saveSettings(localSettings);
     onSave(localSettings);
     onClose();
+  };
+
+  const handleAddKey = async () => {
+      if (!newKey.trim()) return;
+      // Optional: Auto-test before adding? Or just add.
+      // Let's just add it, user can test in list.
+      if (localSettings.apiKeys.includes(newKey.trim())) {
+          showToast("该 Key 已存在", "error");
+          return;
+      }
+      setLocalSettings(prev => ({
+          ...prev,
+          apiKeys: [...prev.apiKeys, newKey.trim()]
+      }));
+      setNewKey('');
+  };
+
+  const handleRemoveKey = (index: number) => {
+      setLocalSettings(prev => ({
+          ...prev,
+          apiKeys: prev.apiKeys.filter((_, i) => i !== index)
+      }));
+      // Clean up status
+      const newStatuses = {...keyStatuses};
+      delete newStatuses[index];
+      setKeyStatuses(newStatuses);
+  };
+
+  const handleTestKey = async (key: string, index: number) => {
+    setTestingIndex(index);
+    try {
+        await testApiConnection(key);
+        setKeyStatuses(prev => ({ ...prev, [index]: 'valid' }));
+        showToast("连接成功", "success");
+    } catch (e: any) {
+        setKeyStatuses(prev => ({ ...prev, [index]: 'invalid' }));
+        showToast(`测试失败: ${e.message}`, "error");
+    } finally {
+        setTestingIndex(null);
+    }
   };
 
   if (!isOpen) return null;
@@ -45,7 +97,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
         
         <div className="flex-1 overflow-y-auto p-6 space-y-8">
           
-          {/* Theme & Appearance */}
+          {/* Theme */}
           <div className="space-y-4 border-b border-gray-100 pb-6">
             <h4 className="font-semibold text-gray-900 flex items-center gap-2">
                 <Palette size={18} className="text-[var(--brand-color)]" /> 主题外观
@@ -57,56 +109,66 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                         onClick={() => setLocalSettings({...localSettings, themeColor: color.value})}
                         className={`w-10 h-10 rounded-full border-2 flex items-center justify-center transition-all ${localSettings.themeColor === color.value ? 'border-gray-900 scale-110' : 'border-transparent'}`}
                         style={{ backgroundColor: color.value }}
-                        title={color.name}
-                    >
-                        {localSettings.themeColor === color.value && <div className="w-3 h-3 bg-white rounded-full" />}
-                    </button>
+                    />
                 ))}
             </div>
           </div>
 
-          {/* API Configuration */}
+          {/* API Keys Configuration */}
           <div className="space-y-4 border-b border-gray-100 pb-6">
             <div className="flex justify-between items-center">
                 <h4 className="font-semibold text-gray-900 flex items-center gap-2">
-                    <Activity size={18} className="text-[var(--brand-color)]" /> API 配置
+                    <Key size={18} className="text-[var(--brand-color)]" /> API Key 管理 (官方)
                 </h4>
-                <a 
-                    href={localSettings.baseUrl} 
-                    target="_blank" 
-                    rel="noreferrer"
-                    className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-full flex items-center gap-1 font-bold transition-colors"
-                >
-                    <CreditCard size={12} /> 测试地址连通性
-                </a>
+                <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                    支持多 Key 自动轮询 (当额度耗尽时自动切换)
+                </span>
             </div>
             
-            <div className="grid grid-cols-1 gap-4">
-                <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
-                        <Key size={14} /> API Key
-                    </label>
+            <div className="space-y-3">
+                {localSettings.apiKeys.map((key, index) => (
+                    <div key={index} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200">
+                        <div className="w-8 h-8 rounded-full bg-white border border-gray-200 flex items-center justify-center text-xs font-bold text-gray-500">
+                            {index + 1}
+                        </div>
+                        <input 
+                            type="password" 
+                            value={key}
+                            readOnly 
+                            className="flex-1 bg-transparent border-none text-gray-600 text-sm focus:ring-0" 
+                        />
+                        
+                        {keyStatuses[index] === 'valid' && <Check size={16} className="text-green-500" />}
+                        {keyStatuses[index] === 'invalid' && <AlertTriangle size={16} className="text-red-500" />}
+
+                        <button 
+                            onClick={() => handleTestKey(key, index)}
+                            disabled={testingIndex === index}
+                            className="text-xs px-2 py-1 bg-white border border-gray-200 rounded hover:bg-gray-100 text-gray-600 flex items-center gap-1"
+                        >
+                            {testingIndex === index ? <Loader2 size={12} className="animate-spin"/> : "测试"}
+                        </button>
+
+                        <button 
+                            onClick={() => handleRemoveKey(index)}
+                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"
+                        >
+                            <Trash2 size={16} />
+                        </button>
+                    </div>
+                ))}
+
+                <div className="flex gap-2 pt-2">
                     <input 
-                        type="password" 
-                        value={localSettings.apiKey}
-                        onChange={e => setLocalSettings({...localSettings, apiKey: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[var(--brand-color)] outline-none"
-                        placeholder="sk-..."
+                        type="password"
+                        value={newKey}
+                        onChange={e => setNewKey(e.target.value)}
+                        placeholder="输入新的 Gemini API Key (sk-...)"
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[var(--brand-color)] outline-none text-sm"
                     />
-                    <p className="text-xs text-gray-500 mt-1">请输入您的 Gemini API Key</p>
-                </div>
-                <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
-                        <Globe size={14} /> Base URL (API 代理地址)
-                    </label>
-                    <input 
-                        type="text" 
-                        value={localSettings.baseUrl}
-                        onChange={e => setLocalSettings({...localSettings, baseUrl: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[var(--brand-color)] outline-none"
-                        placeholder="例如: https://generativelanguage.googleapis.com 或您的代理地址"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">留空则使用默认。请确保地址包含协议头 (如 https://)。</p>
+                    <Button onClick={handleAddKey} disabled={!newKey.trim()} variant="secondary">
+                        <Plus size={16} className="mr-1" /> 添加
+                    </Button>
                 </div>
             </div>
           </div>

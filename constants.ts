@@ -1,3 +1,4 @@
+
 import { AspectRatio, GenerationModel, Project, Character } from "./types";
 
 export const ASPECT_RATIOS: AspectRatio[] = ['1:1', '4:3', '3:4', '16:9', '9:16'];
@@ -24,6 +25,7 @@ export const MOCK_PROJECTS: Project[] = [
     updatedAt: Date.now() - 5000,
     status: '草稿',
     localCharacters: [],
+    styles: [],
     frames: []
   },
   {
@@ -33,6 +35,7 @@ export const MOCK_PROJECTS: Project[] = [
     updatedAt: Date.now() - 100000,
     status: '草稿',
     localCharacters: [],
+    styles: [],
     frames: []
   }
 ];

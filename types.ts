@@ -1,3 +1,4 @@
+
 export type AspectRatio = '1:1' | '4:3' | '3:4' | '16:9' | '9:16';
 
 export enum GenerationModel {
@@ -10,11 +11,12 @@ export const TEXT_MODELS = [
   { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
   { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite' },
   { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+  { value: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5' },
 ];
 
 export interface Settings {
-  apiKey: string;
-  baseUrl: string;
+  apiKeys: string[]; // Supports rotation
+  // baseUrl removed - Enforce Official API
   textModel: string;
   imageModel: GenerationModel;
   jianYingPath: string;
@@ -29,6 +31,12 @@ export interface Character {
   referenceImage?: string; // Base64
 }
 
+export interface StyleReference {
+  id: string;
+  name: string;
+  imageUrl: string; // Base64
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -36,6 +44,8 @@ export interface Project {
   updatedAt: number;
   status: '草稿' | '生成中' | '已完成';
   localCharacters: Character[]; // 故事专用角色库
+  styles?: StyleReference[]; // 故事专用风格库
+  activeStyleId?: string; // 当前激活的风格ID
   frames: StoryboardFrame[];
   promptPrefix?: string; // 全局画面描述词前缀
 }

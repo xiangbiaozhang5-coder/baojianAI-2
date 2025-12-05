@@ -1,12 +1,14 @@
+
 import React, { useState, useEffect, useRef } from 'react';
-import { Project, Character, StoryboardFrame, ToastMessage, AspectRatio, Settings } from '../types';
+import { Project, Character, StoryboardFrame, ToastMessage, AspectRatio, Settings, StyleReference } from '../types';
 import { Button } from './Button';
-import { ChevronLeft, Sparkles, Image as ImageIcon, RefreshCw, Maximize2, Repeat, Users, Upload, FileText, Square, UserPlus, ArrowUp, ArrowDown, Scissors, Merge, Trash2, CheckSquare, X, Plus, Play, PauseCircle, Film, Package, FileType, AlignLeft, Settings2, PenTool, Save, UserCheck, Replace, Download, FolderOutput } from 'lucide-react';
+import { ChevronLeft, Sparkles, Image as ImageIcon, RefreshCw, Maximize2, Repeat, Users, Upload, FileText, Square, UserPlus, ArrowUp, ArrowDown, Scissors, Merge, Trash2, CheckSquare, X, Plus, Play, PauseCircle, Film, Package, FileType, AlignLeft, Settings2, PenTool, Save, UserCheck, Replace, Download, FolderOutput, Palette } from 'lucide-react';
 import { generateImage, inferFrameData, inferBatchPrompts, analyzeRoles, breakdownScript } from '../services/geminiService';
 import { storage } from '../utils/storage';
 import { parseScriptToFrames, splitLastSentence, formatScriptText } from '../utils/scriptParser';
 import { exportToJianYing } from '../utils/exportUtils';
 import { CharacterLibrary } from './CharacterLibrary';
+import { StyleLibrary } from './StyleLibrary';
 import { ImageViewer } from './ImageViewer';
 import { ASPECT_RATIOS } from '../constants';
 import JSZip from 'jszip';
@@ -32,7 +34,9 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
 }) => {
   const [frames, setFrames] = useState<StoryboardFrame[]>(project.frames);
   const [localCharacters, setLocalCharacters] = useState<Character[]>(project.localCharacters || []);
-  
+  const [styles, setStyles] = useState<StyleReference[]>(project.styles || []);
+  const [activeStyleId, setActiveStyleId] = useState<string | undefined>(project.activeStyleId);
+
   // Use local characters for logic
   const allCharacters = localCharacters; 
 
@@ -43,8 +47,9 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
   const [promptPrefix, setPromptPrefix] = useState(project.promptPrefix ?? DEFAULT_PREFIX);
   
   // UI States - Separated to allow concurrency
-  const [isInferring, setIsInferring] = useState(false);
+  const [isBatchInferring, setIsBatchInferring] = useState(false); // Only for "Infer All"
   const [isGenerating, setIsGenerating] = useState(false);
+  const [inferringFrameIds, setInferringFrameIds] = useState<Set<string>>(new Set()); // For concurrent single infer
   
   const [loadingText, setLoadingText] = useState('');
   const [importModalOpen, setImportModalOpen] = useState(false);
@@ -59,6 +64,7 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
   const [importText, setImportText] = useState('');
   
   const [showLocalLib, setShowLocalLib] = useState(false);
+  const [showStyleLib, setShowStyleLib] = useState(false);
   
   // Context Menu
   const [promptImportOpen, setPromptImportOpen] = useState(false);
@@ -85,20 +91,28 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
     setSaveStatus('unsaved');
     const timer = setTimeout(() => {
         setSaveStatus('saving');
-        onSave({...project, frames, localCharacters, promptPrefix, updatedAt: Date.now()});
+        onSave({
+            ...project, 
+            frames, 
+            localCharacters, 
+            styles,
+            activeStyleId,
+            promptPrefix, 
+            updatedAt: Date.now()
+        });
         setTimeout(() => setSaveStatus('saved'), 500);
     }, 800); // 0.8s debounce (faster)
     return () => clearTimeout(timer);
-  }, [frames, localCharacters, promptPrefix]);
+  }, [frames, localCharacters, styles, activeStyleId, promptPrefix]);
 
   const handleManualSave = () => {
-      onSave({...project, frames, localCharacters, promptPrefix, updatedAt: Date.now()});
+      onSave({...project, frames, localCharacters, styles, activeStyleId, promptPrefix, updatedAt: Date.now()});
       setSaveStatus('saved');
   };
 
   const handleBack = () => {
       // Force save before leaving
-      onSave({...project, frames, localCharacters, promptPrefix, updatedAt: Date.now()});
+      onSave({...project, frames, localCharacters, styles, activeStyleId, promptPrefix, updatedAt: Date.now()});
       onBack();
   };
 
@@ -114,8 +128,9 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
   const stopAllProcess = () => {
     stopInferRef.current = true;
     stopGenRef.current = true;
-    setIsInferring(false);
+    setIsBatchInferring(false);
     setIsGenerating(false);
+    setInferringFrameIds(new Set()); // Clear all single infer flags
     setLoadingText('');
     showToast('所有任务已暂停/停止', 'info');
   };
@@ -135,28 +150,26 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
       }
   };
   
-  // Helper to sync character description with prompt
+  // Smart Prompt Sync Logic
   const updatePromptWithChar = (prompt: string | undefined, charDesc: string, isAdding: boolean): string => {
       let current = prompt ? prompt.trim() : '';
-      if (!charDesc) return current;
-
-      const cleanDesc = charDesc.replace(/[。，,.]+$/, '');
+      const cleanDesc = charDesc.trim();
 
       if (isAdding) {
           if (current.includes(cleanDesc)) return current;
-          // Prepend
+          const addition = `${cleanDesc}，[表情]，[动作]`;
           if (current.length > 0) {
-              return `${cleanDesc}，${current}`;
+              return `${current}；${addition}`;
           } else {
-              return cleanDesc;
+              return addition;
           }
       } else {
-          // Remove
           if (!current) return '';
-          let next = current.replace(cleanDesc, '');
+          let next = current.split(cleanDesc).join('');
+          next = next.replace(/；\s*；/g, '；').replace(/;\s*;/g, ';');
           next = next.replace(/，\s*，/g, '，').replace(/,\s*,/g, ',');
-          next = next.replace(/，\s*,/g, '，').replace(/,\s*，/g, '，');
-          next = next.replace(/^[，,\s]+/, '').replace(/[，,\s]+$/, '');
+          next = next.replace(/^[；;，,\s]+/, '').replace(/[；;，,\s]+$/, '');
+          next = next.replace(/\s*；\s*$/, '').replace(/^\s*；\s*/, '');
           return next;
       }
   };
@@ -199,7 +212,9 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
               
               const frame = frames[i];
               if (frame.imageUrl) {
+                  // Ensure we strip the prefix correctly and default to PNG
                   const base64Data = frame.imageUrl.replace(/^data:image\/\w+;base64,/, "");
+                  // STRICT NAMING: 001.png, 002.png
                   const fileName = `${(i + 1).toString().padStart(3, '0')}.png`;
                   folder.file(fileName, base64Data, { base64: true });
                   count++;
@@ -222,7 +237,7 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
           window.URL.revokeObjectURL(url);
           document.body.removeChild(a);
           
-          showToast(`成功导出 ${count} 张图片到默认下载文件夹`, 'success');
+          showToast(`成功导出 ${count} 张 PNG 图片`, 'success');
           
       } catch (e) {
           console.error(e);
@@ -238,16 +253,17 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
       
       const link = document.createElement('a');
       link.href = frame.imageUrl;
+      // Consistent Naming
       link.download = `${project.name}_${(frameIndex + 1).toString().padStart(3, '0')}.png`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      showToast('图片已保存到下载文件夹', 'success');
+      showToast('图片已保存为 PNG', 'success');
   };
 
   const handleSmartBreakdown = async () => {
     if (!importText) return;
-    setIsInferring(true);
+    setIsBatchInferring(true);
     setLoadingText('正在智能拆解剧本...');
     stopInferRef.current = false;
     
@@ -257,7 +273,7 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
         handleScriptOverride(scenes);
     } catch (e: any) {
         showToast(e.message || '智能分镜失败', 'error');
-        setIsInferring(false);
+        setIsBatchInferring(false);
     }
   };
 
@@ -328,7 +344,7 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
   const finishImport = (msg: string) => {
       setImportModalOpen(false);
       setImportText('');
-      setIsInferring(false);
+      setIsBatchInferring(false);
       showToast(msg, 'success');
   };
 
@@ -349,16 +365,13 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
         showToast('建议先在角色库添加角色，以便AI识别。', 'info');
     }
 
-    setIsInferring(true);
+    setIsBatchInferring(true);
     stopInferRef.current = false;
     
-    // Fixed Batch size of 5 for context retention and stability
     const BATCH_SIZE = 5;
     const totalFrames = frames.length;
     let prevContextSummary = "";
 
-    // IMPORTANT: Iterate with awaits to not flood the API, but checks stops.
-    // UI is NOT blocked for generating images while this runs, as we use functional updates.
     for (let i = 0; i < totalFrames; i += BATCH_SIZE) {
         if (stopInferRef.current) break;
         
@@ -371,7 +384,6 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
             batchScripts.push(frames[j].scriptContent);
         }
         
-        // Only show loading text if not generating (avoid conflict)
         if (!isGenerating) {
              setLoadingText(`推理中 ${i + 1}-${end}/${totalFrames} (批量生成含景别描述)...`);
         }
@@ -379,19 +391,18 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
         try {
             const results = await inferBatchPrompts(batchScripts, allCharacters, settings, prevContextSummary);
             
-            // Update context for next batch (use the last script of this batch)
             prevContextSummary = batchScripts[batchScripts.length - 1];
 
-            // FUNCTIONAL STATE UPDATE to avoid race conditions with image generation
             setFrames(prevFrames => {
                 const newFrames = [...prevFrames];
                 
                 results.forEach((res, idx) => {
                    const globalIdx = batchIndices[idx];
                    if (globalIdx < newFrames.length && res.prompt) {
-                       // Map active names to IDs
+                       const safeActiveNames = Array.isArray(res.activeNames) ? res.activeNames : [];
+                       
                        const activeIds = allCharacters
-                            .filter(c => res.activeNames.includes(c.name))
+                            .filter(c => safeActiveNames.includes(c.name))
                             .map(c => c.id);
                        
                        const mergedIds = Array.from(new Set([...activeIds, ...newFrames[globalIdx].characterIds]));
@@ -408,11 +419,10 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
 
         } catch (e) {
             console.error("Batch error", e);
-            // Continue to next batch instead of stopping entirely
         }
     }
     
-    setIsInferring(false);
+    setIsBatchInferring(false);
     if (!stopInferRef.current) showToast('全剧推理完成', 'success');
   };
 
@@ -421,16 +431,16 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
       const prevContext = frames.slice(Math.max(0, index - 5), index).map(f => f.scriptContent);
       const nextContext = frames.slice(index + 1, Math.min(frames.length, index + 4)).map(f => f.scriptContent);
       
-      setLoadingText('单图深度推理中...');
-      setIsInferring(true);
+      setInferringFrameIds(prev => new Set(prev).add(frame.id));
       
       inferFrameData(frame.scriptContent, allCharacters, settings, prevContext, nextContext).then(({ prompt, activeNames }) => {
           if (prompt && prompt.trim().length > 0) {
+              const safeNames = Array.isArray(activeNames) ? activeNames : [];
+              
               const activeIds = allCharacters
-                .filter(c => activeNames.includes(c.name))
+                .filter(c => safeNames.includes(c.name))
                 .map(c => c.id);
 
-              // Safe functional update
               setFrames(prev => {
                   const nf = [...prev];
                   nf[index] = { 
@@ -443,10 +453,14 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
           } else {
               showToast('推理未生成有效内容，保留原描述', 'info');
           }
-          setIsInferring(false);
       }).catch((e: any) => {
-          setIsInferring(false);
           showToast(e.message || '推理请求失败', 'error');
+      }).finally(() => {
+          setInferringFrameIds(prev => {
+              const next = new Set(prev);
+              next.delete(frame.id);
+              return next;
+          });
       });
   };
 
@@ -527,14 +541,14 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
   };
 
   const handleSmartExtractRoles = async () => {
-    setIsInferring(true);
+    setIsBatchInferring(true);
     setLoadingText('正在分析剧本角色...');
     try {
         const fullScript = frames.map(f => f.scriptContent).join('\n');
         const analyzedChars = await analyzeRoles(fullScript, settings);
         
         const newChars = analyzedChars.filter(ac => 
-            !localCharacters.some(lc => lc.name === ac.name)
+            !localCharacters.some(lc => lc.name.trim() === ac.name.trim())
         ).map((c: any) => ({
             ...c,
             id: `char_local_${Date.now()}_${Math.random().toString(36).substr(2,5)}`
@@ -545,13 +559,17 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
             setShowLocalLib(true);
             showToast(`成功提取 ${newChars.length} 个新角色`, 'success');
         } else {
-            showToast('未发现新角色或角色已存在', 'info');
+            if (analyzedChars.length > 0) {
+                showToast('提取的角色已在库中', 'info');
+            } else {
+                showToast('AI 未能从剧本中分析出角色', 'info');
+            }
         }
     } catch (e: any) {
         console.error("Smart extract failed", e);
         showToast(e.message || '角色分析失败', 'error');
     } finally {
-        setIsInferring(false);
+        setIsBatchInferring(false);
     }
   };
 
@@ -575,19 +593,29 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
       showToast(`已保存 ${char.name} 到全局库`, 'success');
   };
 
-  const handleRemoveCharacterFromFrame = (frameIndex: number, charId: string) => {
-      setFrames(prev => {
-          const nf = [...prev];
-          const frame = nf[frameIndex];
-          const charToRemove = allCharacters.find(c => c.id === charId);
+  const handleToggleCharacterInFrame = (frameIndex: number, char: Character) => {
+    setFrames(prev => {
+        const nf = [...prev];
+        const frame = nf[frameIndex];
+        const currentIds = new Set(frame.characterIds);
+        
+        if (currentIds.has(char.id)) {
+            currentIds.delete(char.id);
+            nf[frameIndex].visualPrompt = updatePromptWithChar(frame.visualPrompt, char.description, false);
+        } else {
+            currentIds.add(char.id);
+            nf[frameIndex].visualPrompt = updatePromptWithChar(frame.visualPrompt, char.description, true);
+        }
+        
+        const sortedIds = Array.from(currentIds).sort((a, b) => {
+            const indexA = allCharacters.findIndex(c => c.id === a);
+            const indexB = allCharacters.findIndex(c => c.id === b);
+            return indexA - indexB;
+        });
 
-          nf[frameIndex].characterIds = frame.characterIds.filter(id => id !== charId);
-          
-          if (charToRemove) {
-              nf[frameIndex].visualPrompt = updatePromptWithChar(frame.visualPrompt, charToRemove.description, false);
-          }
-          return nf;
-      });
+        nf[frameIndex].characterIds = sortedIds;
+        return nf;
+    });
   };
 
   // --- Image Handling ---
@@ -595,8 +623,7 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
   const handleGenerateImage = async (idx: number, isHD: boolean = false) => {
     if (!frames[idx].visualPrompt) return showToast('请先生成画面描述词', 'error');
     
-    // Only show text if not inferring (avoid visual conflict)
-    if (!isInferring) setLoadingText(isHD ? '高清生图中...' : '生图中...');
+    if (!isBatchInferring) setLoadingText(isHD ? '高清生图中...' : '生图中...');
     
     setIsGenerating(true);
     stopGenRef.current = false;
@@ -604,6 +631,7 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
     try {
         if (stopGenRef.current) return;
         
+        // 1. Character Reference
         let referenceImage: string | undefined = undefined;
         if (frames[idx].characterIds.length > 0) {
             const mainChar = allCharacters.find(c => c.id === frames[idx].characterIds[0]);
@@ -620,6 +648,13 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
                 }
             }
         }
+
+        // 2. Style Reference
+        let styleImage: string | undefined = undefined;
+        if (activeStyleId) {
+            const style = styles.find(s => s.id === activeStyleId);
+            styleImage = style?.imageUrl;
+        }
         
         const fullPrompt = promptPrefix ? `${promptPrefix}, ${frames[idx].visualPrompt!}` : frames[idx].visualPrompt!;
         
@@ -627,7 +662,8 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
             fullPrompt, 
             settings, 
             frames[idx].aspectRatio,
-            referenceImage, 
+            referenceImage, // character
+            styleImage, // style
             isHD
         );
         
@@ -665,10 +701,11 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
 
         const { i, f } = pendingIndices[k];
 
-        if (!isInferring) setLoadingText(`批量生图 ${k + 1}/${pendingIndices.length} (点击暂停)...`);
-        scrollToFrame(i);
+        if (!isBatchInferring) setLoadingText(`批量生图 ${k + 1}/${pendingIndices.length} (点击暂停)...`);
+        // REMOVED: scrollToFrame(i); -> Fixes auto-jumping issue
         
         try {
+            // 1. Character Ref
             let referenceImage: string | undefined = undefined;
             if (f.characterIds.length > 0) {
                  const mainChar = allCharacters.find(c => c.id === f.characterIds[0]);
@@ -684,6 +721,13 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
                       }
                  }
             }
+
+            // 2. Style Ref
+            let styleImage: string | undefined = undefined;
+            if (activeStyleId) {
+                const style = styles.find(s => s.id === activeStyleId);
+                styleImage = style?.imageUrl;
+            }
             
             const fullPrompt = promptPrefix ? `${promptPrefix}, ${f.visualPrompt!}` : f.visualPrompt!;
 
@@ -692,11 +736,11 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
                 settings, 
                 f.aspectRatio,
                 referenceImage,
+                styleImage,
                 false
             );
 
             if (!stopGenRef.current) {
-                // Strict functional update prevents overwriting inferring data
                 setFrames(prev => {
                     const nf = [...prev];
                     nf[i] = { ...nf[i], imageUrl: img };
@@ -853,23 +897,23 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
           <div className="px-6 py-3 bg-white border-t border-gray-100 flex items-center gap-3 overflow-x-auto shadow-inner">
                 {/* Character & Script Group */}
                 <div className="flex gap-2 p-1 bg-gray-50 rounded-lg border border-gray-100">
-                    <Button size="sm" onClick={() => setShowLocalLib(true)} className="bg-indigo-500 hover:bg-indigo-600 text-white shadow-indigo-500/20 border-transparent">
+                    <Button size="sm" onClick={() => { setShowLocalLib(true); setShowStyleLib(false); }} className="bg-indigo-500 hover:bg-indigo-600 text-white shadow-indigo-500/20 border-transparent">
                         <Users size={16} className="mr-2" /> 角色库
+                    </Button>
+                    <Button size="sm" onClick={() => { setShowStyleLib(true); setShowLocalLib(false); }} className={`hover:bg-purple-600 text-white shadow-purple-500/20 border-transparent ${activeStyleId ? 'bg-purple-600' : 'bg-purple-400'}`}>
+                        <Palette size={16} className="mr-2" /> 风格库 {activeStyleId && '✓'}
                     </Button>
                     <Button size="sm" onClick={handleAutoMatchRoles} className="bg-cyan-500 hover:bg-cyan-600 text-white shadow-cyan-500/20 border-transparent" title="扫描剧本并自动勾选对应角色(快速匹配)">
                         <UserCheck size={16} className="mr-2" /> 快速匹配
-                    </Button>
-                    <Button size="sm" onClick={() => setImportModalOpen(true)} className="bg-blue-500 hover:bg-blue-600 text-white shadow-blue-500/20 border-transparent">
-                        <Upload size={16} className="mr-2" /> 导入自定义
                     </Button>
                 </div>
 
                 {/* AI Tools Group */}
                 <div className="flex gap-2 p-1 bg-gray-50 rounded-lg border border-gray-100">
-                    <Button size="sm" onClick={() => setImportModalOpen(true)} disabled={isInferring} className="bg-pink-500 hover:bg-pink-600 text-white shadow-pink-500/20 border-transparent disabled:opacity-50 disabled:cursor-not-allowed">
+                    <Button size="sm" onClick={() => setImportModalOpen(true)} disabled={isBatchInferring} className="bg-pink-500 hover:bg-pink-600 text-white shadow-pink-500/20 border-transparent disabled:opacity-50 disabled:cursor-not-allowed">
                         <Film size={16} className="mr-2" /> AI 智能分镜
                     </Button>
-                    <Button size="sm" onClick={handleSmartExtractRoles} disabled={isInferring} className="bg-teal-500 hover:bg-teal-600 text-white shadow-teal-500/20 border-transparent disabled:opacity-50 disabled:cursor-not-allowed">
+                    <Button size="sm" onClick={handleSmartExtractRoles} disabled={isBatchInferring} className="bg-teal-500 hover:bg-teal-600 text-white shadow-teal-500/20 border-transparent disabled:opacity-50 disabled:cursor-not-allowed">
                         <UserPlus size={16} className="mr-2" /> AI 提取
                     </Button>
                 </div>
@@ -897,12 +941,12 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
                         size="sm" 
                         onClick={handleInferAllPrompts}
                         onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setPromptImportOpen(true); }}
-                        disabled={isInferring}
+                        disabled={isBatchInferring}
                         className="bg-[var(--brand-color)] hover:brightness-110 text-white shadow-[var(--brand-color)]/30 border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
                         title="自动识别角色、动作、环境并生成描述词 (含景别)"
                     >
-                        {isInferring ? <RefreshCw className="animate-spin mr-2" size={16} /> : <Sparkles size={16} className="mr-2" />} 
-                        {isInferring ? '推理中...' : '批量推理'}
+                        {isBatchInferring ? <RefreshCw className="animate-spin mr-2" size={16} /> : <Sparkles size={16} className="mr-2" />} 
+                        {isBatchInferring ? '推理中...' : '批量推理'}
                     </Button>
 
                     <Button size="sm" onClick={handleBatchGenerateImages} disabled={isGenerating} className="bg-emerald-500 hover:bg-emerald-600 text-white shadow-emerald-500/20 border-transparent disabled:opacity-50 disabled:cursor-not-allowed">
@@ -920,7 +964,7 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
                 </div>
 
                 {/* Stop Button (Global) */}
-                {(isInferring || isGenerating) && (
+                {(isBatchInferring || isGenerating) && (
                     <Button variant="danger" size="sm" onClick={stopAllProcess} className="px-4 ml-2 animate-in fade-in zoom-in">
                         <PauseCircle size={16} className="mr-2 fill-current" /> 停止
                     </Button>
@@ -934,7 +978,7 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
          <div ref={framesContainerRef} className="flex-1 overflow-y-auto p-6 bg-gray-100 relative">
             
             {/* Loading Overlay (Non-blocking) */}
-            {(isInferring || isGenerating) && loadingText && (
+            {(isBatchInferring || isGenerating) && loadingText && (
                 <div className="fixed top-24 right-8 z-40 bg-black/80 text-white px-4 py-2 rounded-lg flex items-center shadow-lg backdrop-blur-md border border-white/20 animate-in fade-in slide-in-from-top-4 pointer-events-auto">
                     <div className="animate-spin rounded-full h-3 w-3 border-2 border-[var(--brand-color)] border-t-transparent mr-3"></div>
                     <span className="text-xs font-medium mr-4">{loadingText}</span>
@@ -1000,9 +1044,10 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
                                     <span>画面描述词 (AI将自动加入景别)</span>
                                     <button 
                                         onClick={() => handleSingleInfer(index)}
-                                        disabled={isInferring}
-                                        className="text-[10px] bg-blue-50 text-blue-600 px-1.5 rounded hover:bg-blue-100 disabled:opacity-50"
+                                        disabled={inferringFrameIds.has(frame.id)}
+                                        className="text-[10px] bg-blue-50 text-blue-600 px-1.5 rounded hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                                     >
+                                        {inferringFrameIds.has(frame.id) && <RefreshCw size={8} className="animate-spin" />}
                                         推理
                                     </button>
                                 </div>
@@ -1016,7 +1061,8 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
                                             return nf;
                                         });
                                     }}
-                                    placeholder="描述词..."
+                                    placeholder={inferringFrameIds.has(frame.id) ? "正在推理中..." : "描述词..."}
+                                    disabled={inferringFrameIds.has(frame.id)}
                                 />
                             </div>
 
@@ -1035,26 +1081,7 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
                                         }`}>
                                             <div 
                                                 className="flex-1 cursor-pointer flex items-center"
-                                                onClick={() => {
-                                                    setFrames(prev => {
-                                                        const nf = [...prev];
-                                                        const f = nf[index];
-                                                        const ids = new Set(f.characterIds);
-                                                        
-                                                        if (!isSelected) {
-                                                            // ADD (Prepend)
-                                                            ids.add(char.id);
-                                                            nf[index].visualPrompt = updatePromptWithChar(f.visualPrompt, char.description, true);
-                                                        } else {
-                                                            // REMOVE
-                                                            ids.delete(char.id); 
-                                                            nf[index].visualPrompt = updatePromptWithChar(f.visualPrompt, char.description, false);
-                                                        }
-
-                                                        nf[index].characterIds = Array.from(ids);
-                                                        return nf;
-                                                    });
-                                                }}
+                                                onClick={() => handleToggleCharacterInFrame(index, char)}
                                             >
                                                 <span className="truncate">{char.name}</span>
                                             </div>
@@ -1062,7 +1089,7 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
                                                 <button 
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        handleRemoveCharacterFromFrame(index, char.id);
+                                                        handleToggleCharacterInFrame(index, char);
                                                     }}
                                                     className="ml-1 text-red-400 hover:text-red-600"
                                                 >
@@ -1217,6 +1244,34 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
                 </div>
             </div>
          )}
+         
+         {/* Style Lib Sidebar */}
+         {showStyleLib && (
+            <div className="absolute top-0 right-0 bottom-0 w-96 bg-white shadow-2xl z-30 border-l border-gray-200 flex flex-col animate-in slide-in-from-right duration-300">
+                <div className="flex justify-between items-center p-4 border-b border-gray-100 bg-gray-50">
+                    <h3 className="font-bold flex items-center gap-2">
+                        <Palette size={18}/> 风格参考库
+                    </h3>
+                    <button onClick={() => setShowStyleLib(false)} className="hover:bg-gray-200 p-1 rounded"><X size={18}/></button>
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                    <StyleLibrary 
+                        styles={styles}
+                        activeStyleId={activeStyleId}
+                        onAddStyle={(s) => setStyles([...styles, s])}
+                        onDeleteStyle={(id) => {
+                            setStyles(styles.filter(s => s.id !== id));
+                            if (activeStyleId === id) setActiveStyleId(undefined);
+                        }}
+                        onSetActiveStyle={(id) => {
+                            setActiveStyleId(id);
+                            if (id) showToast('已激活风格，后续生图将应用此风格', 'success');
+                            else showToast('已取消风格参考', 'info');
+                        }}
+                    />
+                </div>
+            </div>
+         )}
       </div>
 
       {/* Floating Navigation */}
@@ -1243,10 +1298,10 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
           <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
               <div className="bg-white rounded-lg w-full max-w-sm p-6 shadow-xl animate-in fade-in zoom-in-95">
                   <h3 className="font-bold text-lg mb-2 flex items-center gap-2">
-                      <FolderOutput size={20} className="text-gray-700" /> 导出图片
+                      <FolderOutput size={20} className="text-gray-700" /> 导出图片 (PNG)
                   </h3>
                   <p className="text-sm text-gray-500 mb-6">
-                      选择导出范围。图片将打包为 ZIP 下载到浏览器的默认下载文件夹中。
+                      选择导出范围。图片将按分镜号命名 (如 001.png) 并打包为 ZIP 下载。
                   </p>
                   
                   <div className="space-y-3">
@@ -1390,7 +1445,7 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
                     </div>
 
                     <div className="flex justify-between items-center pt-2">
-                        <Button size="sm" variant="secondary" onClick={handleSmartBreakdown} disabled={!importText || isInferring} className="text-purple-600">
+                        <Button size="sm" variant="secondary" onClick={handleSmartBreakdown} disabled={!importText || isBatchInferring} className="text-purple-600">
                              <Sparkles size={14} className="mr-2" /> 
                              AI 智能辅助拆解 (可选)
                         </Button>
