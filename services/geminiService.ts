@@ -17,6 +17,22 @@ const formatError = (error: any, context: string): string => {
   return `${context}: ${msg}`;
 };
 
+// Retry helper with exponential backoff
+const retryWithBackoff = async <T>(fn: () => Promise<T>, retries = 3, baseDelay = 2000): Promise<T> => {
+  try {
+    return await fn();
+  } catch (error: any) {
+    const msg = error instanceof Error ? error.message : String(error);
+    // Retry on Rate Limit (429) or Service Unavailable (503)
+    if ((msg.includes('429') || msg.includes('503')) && retries > 0) {
+      console.warn(`Request failed with ${msg}. Retrying in ${baseDelay}ms... (${retries} attempts left)`);
+      await new Promise(resolve => setTimeout(resolve, baseDelay));
+      return retryWithBackoff(fn, retries - 1, baseDelay * 2);
+    }
+    throw error;
+  }
+};
+
 // Helper to create client with dynamic settings
 const getClient = (settings: Settings) => {
   // Priority: 
@@ -53,7 +69,7 @@ export const generateImage = async (
   isHD: boolean = false
 ): Promise<string> => {
   const ai = getClient(settings);
-  const model = isHD ? GenerationModel.NANOBANANA_PRO : settings.imageModel;
+  const model = isHD ? GenerationModel.GEMINI_3_PRO_IMAGE_PREVIEW : settings.imageModel;
 
   try {
     const parts: any[] = [];
@@ -70,13 +86,17 @@ export const generateImage = async (
     // Force style prompts if needed, but usually the prompt itself is enough.
     parts.push({ text: prompt });
 
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: { parts: parts },
-      config: {
-        imageConfig: { aspectRatio: aspectRatio },
-      },
-    });
+    // Image generation is expensive/slow, we usually don't retry immediately on 429 as aggressively,
+    // but a single retry can help stability.
+    const response = await retryWithBackoff(async () => {
+        return await ai.models.generateContent({
+            model: model,
+            contents: { parts: parts },
+            config: {
+                imageConfig: { aspectRatio: aspectRatio },
+            },
+        });
+    }, 1, 3000); // Fewer retries for images
 
     if (response.candidates && response.candidates[0].content.parts) {
       for (const part of response.candidates[0].content.parts) {
@@ -121,9 +141,11 @@ export const analyzeRoles = async (script: string, settings: Settings): Promise<
   ${script}`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: settings.textModel,
-      contents: prompt,
+    const response = await retryWithBackoff(async () => {
+        return await ai.models.generateContent({
+            model: settings.textModel,
+            contents: prompt,
+        });
     });
     
     let text = response.text || "[]";
@@ -183,12 +205,14 @@ export const inferBatchPrompts = async (
     `;
 
     try {
-        const response = await ai.models.generateContent({
-            model: settings.textModel,
-            contents: prompt,
-            config: {
-                responseMimeType: 'application/json'
-            }
+        const response = await retryWithBackoff(async () => {
+            return await ai.models.generateContent({
+                model: settings.textModel,
+                contents: prompt,
+                config: {
+                    responseMimeType: 'application/json'
+                }
+            });
         });
 
         const text = response.text || "[]";
@@ -248,12 +272,14 @@ export const inferFrameData = async (
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: settings.textModel,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json'
-      }
+    const response = await retryWithBackoff(async () => {
+        return await ai.models.generateContent({
+            model: settings.textModel,
+            contents: prompt,
+            config: {
+                responseMimeType: 'application/json'
+            }
+        });
     });
     
     const text = response.text || "{}";
@@ -287,10 +313,13 @@ export const breakdownScript = async (scriptText: string, settings: Settings): P
   ${scriptText}`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: settings.textModel,
-      contents: prompt,
+    const response = await retryWithBackoff(async () => {
+        return await ai.models.generateContent({
+            model: settings.textModel,
+            contents: prompt,
+        });
     });
+
     let text = response.text || "[]";
     text = text.replace(/```json/g, '').replace(/```/g, '').trim();
     return JSON.parse(text);

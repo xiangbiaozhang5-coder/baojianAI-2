@@ -132,8 +132,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                         onChange={e => setLocalSettings({...localSettings, imageModel: e.target.value as GenerationModel})}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                     >
-                        <option value={GenerationModel.NANOBANANA}>NanoBanana (Fast)</option>
-                        <option value={GenerationModel.NANOBANANA_PRO}>NanoBanana Pro (Quality)</option>
+                        <option value={GenerationModel.GEMINI_2_5_FLASH_IMAGE}>NanoBanana</option>
+                        <option value={GenerationModel.GEMINI_3_PRO_IMAGE_PREVIEW}>NanoBanana Pro</option>
                     </select>
                 </div>
             </div>

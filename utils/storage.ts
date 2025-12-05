@@ -8,9 +8,9 @@ const KEYS = {
 
 const DEFAULT_SETTINGS: Settings = {
   apiKey: '',
-  baseUrl: 'https://bj.nfai.lol',
+  baseUrl: 'https://generativelanguage.googleapis.com',
   textModel: 'gemini-3-pro-preview',
-  imageModel: GenerationModel.NANOBANANA,
+  imageModel: GenerationModel.GEMINI_2_5_FLASH_IMAGE,
   jianYingPath: 'C:/Users/Admin/AppData/Local/JianYingPro/User Data/Projects/',
   outputImgPath: 'D:/AI_Output/',
   themeColor: '#f97316' // Default Orange

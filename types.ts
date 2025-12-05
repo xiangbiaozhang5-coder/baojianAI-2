@@ -1,13 +1,15 @@
 export type AspectRatio = '1:1' | '4:3' | '3:4' | '16:9' | '9:16';
 
 export enum GenerationModel {
-  NANOBANANA = 'gemini-2.5-flash-image',
-  NANOBANANA_PRO = 'gemini-3-pro-image-preview',
+  GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image',
+  GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview',
 }
 
 export const TEXT_MODELS = [
-  { value: 'gemini-3-pro-preview', label: 'Gemini 3 Pro Preview' },
-  { value: 'claude-sonnet-4-5-20250929', label: 'Claude 3.5 Sonnet' },
+  { value: 'gemini-3-pro-preview', label: 'Gemini 3.0 Pro Preview' },
+  { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+  { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite' },
+  { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
 ];
 
 export interface Settings {

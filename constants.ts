@@ -3,8 +3,8 @@ import { AspectRatio, GenerationModel, Project, Character } from "./types";
 export const ASPECT_RATIOS: AspectRatio[] = ['1:1', '4:3', '3:4', '16:9', '9:16'];
 
 export const MODELS = [
-  { value: GenerationModel.NANOBANANA, label: 'NanoBanana (Fast)' },
-  { value: GenerationModel.NANOBANANA_PRO, label: 'NanoBanana Pro (High Quality)' },
+  { value: GenerationModel.GEMINI_2_5_FLASH_IMAGE, label: 'NanoBanana' },
+  { value: GenerationModel.GEMINI_3_PRO_IMAGE_PREVIEW, label: 'NanoBanana Pro' },
 ];
 
 export const MOCK_CHARACTERS: Character[] = [

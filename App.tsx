@@ -52,7 +52,7 @@ const App: React.FC = () => {
                 endTime: item.endTime,
                 characterIds: [],
                 aspectRatio: '4:3',
-                model: settings.imageModel || GenerationModel.NANOBANANA
+                model: settings.imageModel || GenerationModel.GEMINI_2_5_FLASH_IMAGE
             }));
             showToast(`已从 SRT 创建 ${initialFrames.length} 个分镜`, 'success');
         } catch (e) {
