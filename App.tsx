@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { DraftsList } from './components/DraftsList';
@@ -19,23 +18,39 @@ const App: React.FC = () => {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
-  const [settings, setSettings] = useState<Settings>(storage.getSettings());
+  const [settings, setSettings] = useState<Settings>(storage.getSettingsSync());
+  const [loading, setLoading] = useState(true);
   
-  // Initialize from storage
+  // Initialize from storage (Async)
   useEffect(() => {
-    setProjects(storage.getProjects());
-    setCharacters(storage.getCharacters());
-    const currentSettings = storage.getSettings();
-    setSettings(currentSettings);
-    
-    // If no keys are configured, open settings automatically to guide user
-    if (!currentSettings.apiKeys || currentSettings.apiKeys.length === 0) {
-        // Short delay to allow UI to mount
-        setTimeout(() => {
-            setIsSettingsOpen(true);
-            showToast('请先在设置中配置 API Key 和代理地址', 'info');
-        }, 500);
-    }
+    const init = async () => {
+        try {
+            // Load all data from server
+            const [p, c, s] = await Promise.all([
+                storage.loadProjects(),
+                storage.loadCharacters(),
+                storage.loadSettings()
+            ]);
+            
+            setProjects(p);
+            setCharacters(c);
+            setSettings(s);
+
+            // If no keys are configured, open settings
+            if (!s.apiKeys || s.apiKeys.length === 0) {
+                setTimeout(() => {
+                    setIsSettingsOpen(true);
+                    showToast('请先在设置中配置 API Key', 'info');
+                }, 500);
+            }
+        } catch (e) {
+            console.error("Initialization failed", e);
+            showToast('无法连接服务器，已切换至离线模式', 'error');
+        } finally {
+            setLoading(false);
+        }
+    };
+    init();
   }, []);
 
   // Toast Handler
@@ -78,12 +93,14 @@ const App: React.FC = () => {
       updatedAt: Date.now(),
       status: '草稿',
       frames: initialFrames,
-      localCharacters: [], // Init empty
-      promptPrefix: '参考图片风格，保持图中角色一致性' // Default prefix
+      localCharacters: [], 
+      promptPrefix: '参考图片风格，保持图中角色一致性' 
     };
-    const updated = [newProject, ...projects];
-    setProjects(updated);
-    storage.saveProjects(updated);
+    
+    // Optimistic Update
+    setProjects(prev => [newProject, ...prev]);
+    // Async Save
+    storage.saveSingleProject(newProject);
     
     setActiveProjectId(newProject.id);
     setCurrentView('editor');
@@ -94,7 +111,7 @@ const App: React.FC = () => {
     if (confirm('确认删除此草稿？')) {
       const updated = projects.filter(p => p.id !== id);
       setProjects(updated);
-      storage.saveProjects(updated);
+      storage.deleteProject(id);
       showToast('草稿已删除', 'info');
     }
   };
@@ -105,9 +122,10 @@ const App: React.FC = () => {
   };
 
   const handleSaveProject = (updatedProject: Project) => {
-    const updated = projects.map(p => p.id === updatedProject.id ? updatedProject : p);
-    setProjects(updated);
-    storage.saveProjects(updated);
+    // Optimistic Update
+    setProjects(prev => prev.map(p => p.id === updatedProject.id ? updatedProject : p));
+    // Async Save
+    storage.saveSingleProject(updatedProject);
   };
 
   const handleUpdateCharacters = (chars: Character[]) => {
@@ -136,8 +154,16 @@ const App: React.FC = () => {
       }
   };
 
-  // Render logic based on view state
   const renderContent = () => {
+    if (loading) {
+        return (
+            <div className="flex h-screen items-center justify-center bg-gray-50 flex-col gap-4">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[var(--brand-color)]"></div>
+                <div className="text-gray-500 font-medium">正在连接服务器...</div>
+            </div>
+        );
+    }
+
     if (currentView === 'editor' && activeProjectId) {
       const activeProject = projects.find(p => p.id === activeProjectId);
       if (activeProject) {
@@ -155,7 +181,6 @@ const App: React.FC = () => {
       }
     }
 
-    // Default layouts with sidebar
     return (
       <div className="flex h-screen bg-gray-50">
         <Sidebar currentView={currentView} onChangeView={handleViewChange} />
@@ -187,8 +212,6 @@ const App: React.FC = () => {
   return (
     <div style={({ '--brand-color': settings.themeColor } as React.CSSProperties)}>
         <ToastContainer toasts={toasts} removeToast={removeToast} />
-        
-        {/* Main App */}
         <div>
             {renderContent()}
         </div>
