@@ -9,7 +9,7 @@ const KEYS = {
 
 const DEFAULT_SETTINGS: Settings = {
   apiKeys: [], 
-  baseUrl: 'https://generativelanguage.googleapis.com', // Default to Official
+  baseUrl: '', // Empty means use Official SDK Default
   textModel: 'gemini-2.5-flash', 
   imageModel: GenerationModel.GEMINI_2_5_FLASH_IMAGE,
   jianYingPath: 'C:/Users/Admin/AppData/Local/JianYingPro/User Data/Projects/',
@@ -44,8 +44,8 @@ export const storage = {
         delete parsed.apiKey;
     }
     
-    // Ensure baseUrl exists
-    if (!parsed.baseUrl) {
+    // Migration: Ensure baseUrl exists, default to empty if missing
+    if (parsed.baseUrl === undefined || parsed.baseUrl === null) {
         parsed.baseUrl = DEFAULT_SETTINGS.baseUrl;
     }
 

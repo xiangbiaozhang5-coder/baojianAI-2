@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Settings, GenerationModel, TEXT_MODELS } from '../types';
 import { Button } from './Button';
@@ -39,20 +38,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
     if (localSettings.apiKeys.length === 0) {
         showToast("警告：未配置 API Key，功能可能无法使用", "info");
     }
-    storage.saveSettings(localSettings);
-    onSave(localSettings);
+    // Deep trim all keys and url before saving
+    const cleanedSettings = {
+        ...localSettings,
+        baseUrl: localSettings.baseUrl?.trim().replace(/\/+$/, '') || '', // Remove trailing slash
+        apiKeys: localSettings.apiKeys.map(k => k.trim().replace(/[\s\uFEFF\xA0]+/g, '')).filter(k => k.length > 0)
+    };
+
+    storage.saveSettings(cleanedSettings);
+    onSave(cleanedSettings);
     onClose();
   };
 
   const handleAddKey = async () => {
-      if (!newKey.trim()) return;
-      if (localSettings.apiKeys.includes(newKey.trim())) {
+      const cleanedKey = newKey.trim().replace(/[\s\uFEFF\xA0]+/g, '');
+      if (!cleanedKey) return;
+      
+      if (localSettings.apiKeys.includes(cleanedKey)) {
           showToast("该 Key 已存在", "error");
           return;
       }
       setLocalSettings(prev => ({
           ...prev,
-          apiKeys: [...prev.apiKeys, newKey.trim()]
+          apiKeys: [...prev.apiKeys, cleanedKey]
       }));
       setNewKey('');
   };
@@ -69,9 +77,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
   const handleTestKey = async (key: string, index: number) => {
     setTestingIndex(index);
+    // Sanitize before testing
+    const cleanUrl = localSettings.baseUrl?.trim().replace(/\/+$/, '');
+    const cleanKey = key.trim().replace(/[\s\uFEFF\xA0]+/g, '');
+
     try {
-        // Use the current baseUrl from input state, not just saved one
-        await testApiConnection(key, localSettings.baseUrl);
+        await testApiConnection(cleanKey, cleanUrl || '');
         setKeyStatuses(prev => ({ ...prev, [index]: 'valid' }));
         showToast("连接成功", "success");
     } catch (e: any) {
@@ -110,10 +121,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                     type="text" 
                     value={localSettings.baseUrl}
                     onChange={e => setLocalSettings({...localSettings, baseUrl: e.target.value})}
-                    placeholder="例如: https://generativelanguage.googleapis.com"
+                    onBlur={() => setLocalSettings(prev => ({...prev, baseUrl: prev.baseUrl.trim()}))}
+                    placeholder="留空则使用官方地址 (https://generativelanguage.googleapis.com)"
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[var(--brand-color)] outline-none text-sm font-mono"
                 />
-                <p className="text-[10px] text-gray-400 mt-1">默认为 Gemini 官方地址。如需使用第三方中转，请修改此处 (例如: https://my-proxy.com)。</p>
+                <p className="text-[10px] text-gray-400 mt-1">
+                    默认为空 (或官方地址)。若使用第三方代理，请填写完整地址 (例如: https://proxy.example.com)。
+                    <br/>注意：不需要添加 `/v1beta` 后缀，SDK会自动处理。
+                </p>
             </div>
             
             <div className="space-y-3">

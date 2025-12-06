@@ -1,11 +1,32 @@
+
 import { GoogleGenAI } from "@google/genai";
 import { GenerationModel, Settings, Character } from "../types";
+
+// Helper to clean Base URL
+const cleanBaseUrl = (url?: string): string | undefined => {
+    if (!url || !url.trim()) return undefined; 
+    const trimmed = url.trim().replace(/\/+$/, '');
+    
+    // If user explicitly entered the official URL, treat it as undefined (default)
+    // to avoid potential SDK issues with double-configuration
+    if (trimmed === 'https://generativelanguage.googleapis.com') return undefined;
+    
+    return trimmed;
+};
+
+// Helper to clean API Key
+const cleanApiKey = (key: string): string => {
+    if (!key) return "";
+    // Remove all whitespace, newlines, and non-breaking spaces
+    return key.replace(/[\s\uFEFF\xA0]+/g, '');
+};
 
 // Helper to format error messages
 const formatError = (error: any, context: string): string => {
   let msg = error instanceof Error ? error.message : String(error);
   
-  if (msg.includes('401')) msg = 'API Key 无效或未授权 (401)';
+  if (msg.includes('400')) msg = '请求无效 (400) - 请检查 API Key 是否正确，或代理地址是否支持该模型';
+  else if (msg.includes('401')) msg = 'API Key 无效或未授权 (401)';
   else if (msg.includes('403')) msg = 'API Key 权限不足 (403)';
   else if (msg.includes('404')) msg = '请求的模型不存在或代理地址错误 (404)';
   else if (msg.includes('429')) msg = '请求过于频繁/额度耗尽 (429)';
@@ -62,19 +83,22 @@ const executeWithKeyRotation = async <T>(
         throw new Error("未配置 API Key，请在设置中添加");
     }
 
+    const baseUrl = cleanBaseUrl(settings.baseUrl);
     let lastError: any = null;
 
     for (let i = 0; i < keys.length; i++) {
-        const key = keys[i];
-        if (!key.trim()) continue;
+        const key = cleanApiKey(keys[i]);
+        if (!key) continue;
 
         try {
-            // Apply Custom Proxy URL (baseUrl)
-            // Note: We cast to any to support baseUrl injection if type definitions are strict
-            const ai = new GoogleGenAI({ 
-                apiKey: key,
-                baseUrl: settings.baseUrl 
-            } as any);
+            // Initialize SDK with cleaned params
+            // DYNAMIC CONFIG: Only add baseUrl if it exists to avoid passing undefined/null
+            const clientOptions: any = { apiKey: key };
+            if (baseUrl) {
+                clientOptions.baseUrl = baseUrl;
+            }
+
+            const ai = new GoogleGenAI(clientOptions);
             
             // Wrap the specific AI call in a retry block (Handling 429s for THIS key)
             return await retryOperation(() => operation(ai));
@@ -84,9 +108,11 @@ const executeWithKeyRotation = async <T>(
             const msg = error.message || String(error);
             const isQuotaError = msg.includes('429') || msg.includes('Quota exceeded');
             const isAuthError = msg.includes('401') || msg.includes('403') || msg.includes('API key not valid');
+            // 400 is often an invalid key format or invalid argument, but we should try next key just in case it's key-specific
+            const isBadRequest = msg.includes('400') || msg.includes('INVALID_ARGUMENT');
 
-            if (isQuotaError || isAuthError) {
-                console.warn(`Key ending in ...${key.slice(-4)} failed (${isQuotaError ? 'Quota' : 'Auth'}). Switching to next key...`);
+            if (isQuotaError || isAuthError || isBadRequest) {
+                console.warn(`Key ...${key.slice(-4)} failed (${isQuotaError ? 'Quota' : (isAuthError ? 'Auth' : 'BadReq')}). Switching to next key...`);
                 
                 if (i === keys.length - 1) {
                     break;
@@ -100,19 +126,24 @@ const executeWithKeyRotation = async <T>(
 
     const errorMsg = formatError(lastError, contextName);
     console.error(errorMsg);
-    throw new Error(`${errorMsg} (已重试并尝试所有可用 Key)`);
+    throw new Error(`${errorMsg} (已尝试所有可用 Key)`);
 };
 
 /**
  * Test API Connection (Single Key + URL)
  */
 export const testApiConnection = async (apiKey: string, baseUrl: string, model: string = 'gemini-2.5-flash'): Promise<boolean> => {
-  if (!apiKey || !apiKey.trim()) throw new Error("API Key 为空");
+  const cleanKey = cleanApiKey(apiKey);
+  const cleanUrl = cleanBaseUrl(baseUrl);
   
-  const ai = new GoogleGenAI({ 
-      apiKey: apiKey.trim(),
-      baseUrl: baseUrl
-  } as any);
+  if (!cleanKey) throw new Error("API Key 为空或格式错误");
+  
+  const clientOptions: any = { apiKey: cleanKey };
+  if (cleanUrl) {
+      clientOptions.baseUrl = cleanUrl;
+  }
+  
+  const ai = new GoogleGenAI(clientOptions);
   
   try {
       await ai.models.generateContent({
@@ -121,6 +152,7 @@ export const testApiConnection = async (apiKey: string, baseUrl: string, model: 
       });
       return true;
   } catch (error) {
+      console.error("Connection Test Error:", error);
       const msg = formatError(error, "连接测试失败");
       throw new Error(msg);
   }
