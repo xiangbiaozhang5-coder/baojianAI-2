@@ -5,34 +5,45 @@ import { GenerationModel, Settings, Character } from "../types";
 // Helper to clean Base URL
 const cleanBaseUrl = (url?: string): string | undefined => {
     if (!url || !url.trim()) return undefined; 
-    const trimmed = url.trim().replace(/\/+$/, '');
+    let trimmed = url.trim().replace(/\/+$/, '');
     
     // If user explicitly entered the official URL, treat it as undefined (default)
-    // to avoid potential SDK issues with double-configuration
     if (trimmed === 'https://generativelanguage.googleapis.com') return undefined;
     
     return trimmed;
 };
 
-// Helper to clean API Key
+// Helper to clean API Key - STRICT MODE
 const cleanApiKey = (key: string): string => {
     if (!key) return "";
-    // Remove all whitespace, newlines, and non-breaking spaces
-    return key.replace(/[\s\uFEFF\xA0]+/g, '');
+    let k = key.trim();
+    
+    // 1. Remove common prefixes like "key=", "api_key:", "google_api_key="
+    k = k.replace(/^(?:key|api_key|google_api_key)[:=]\s*/i, '');
+    
+    // 2. Remove surrounding quotes (single or double)
+    k = k.replace(/^['"]+|['"]+$/g, '');
+    
+    // 3. Remove invisible chars, newlines, BOM
+    k = k.replace(/[\s\uFEFF\xA0]+/g, '');
+    
+    return k;
 };
 
 // Helper to format error messages
 const formatError = (error: any, context: string): string => {
   let msg = error instanceof Error ? error.message : String(error);
   
-  if (msg.includes('400')) msg = '请求无效 (400) - 请检查 API Key 是否正确，或代理地址是否支持该模型';
-  else if (msg.includes('401')) msg = 'API Key 无效或未授权 (401)';
-  else if (msg.includes('403')) msg = 'API Key 权限不足 (403)';
-  else if (msg.includes('404')) msg = '请求的模型不存在或代理地址错误 (404)';
-  else if (msg.includes('429')) msg = '请求过于频繁/额度耗尽 (429)';
+  if (msg.includes('400') || msg.includes('INVALID_ARGUMENT') || msg.includes('API key not valid')) {
+      msg = 'API Key 无效 (400) - 请检查：1. 是否复制了多余的引号/前缀；2. Google Cloud 后台是否已启用 "Generative Language API"；3. Key 是否完整。';
+  }
+  else if (msg.includes('401')) msg = 'API Key 无效或未授权 (401) - Key 可能错误或已失效';
+  else if (msg.includes('403')) msg = 'API Key 权限不足 (403) - 请检查账号额度或地区限制';
+  else if (msg.includes('404')) msg = '请求的模型不存在或代理地址路径错误 (404)';
+  else if (msg.includes('429')) msg = '请求过于频繁/额度耗尽 (429) - 正在尝试切换 Key...';
   else if (msg.includes('500')) msg = 'AI 服务内部错误 (500)';
   else if (msg.includes('503')) msg = '服务暂时不可用 (503)';
-  else if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) msg = '网络连接失败 (检查网络/代理配置)';
+  else if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) msg = '网络连接失败 (检查网络/VPN/代理配置)';
   
   return `${context}: ${msg}`;
 };
@@ -92,7 +103,6 @@ const executeWithKeyRotation = async <T>(
 
         try {
             // Initialize SDK with cleaned params
-            // DYNAMIC CONFIG: Only add baseUrl if it exists to avoid passing undefined/null
             const clientOptions: any = { apiKey: key };
             if (baseUrl) {
                 clientOptions.baseUrl = baseUrl;
@@ -108,11 +118,11 @@ const executeWithKeyRotation = async <T>(
             const msg = error.message || String(error);
             const isQuotaError = msg.includes('429') || msg.includes('Quota exceeded');
             const isAuthError = msg.includes('401') || msg.includes('403') || msg.includes('API key not valid');
-            // 400 is often an invalid key format or invalid argument, but we should try next key just in case it's key-specific
+            // 400 is often key format issue, but try next key anyway
             const isBadRequest = msg.includes('400') || msg.includes('INVALID_ARGUMENT');
 
             if (isQuotaError || isAuthError || isBadRequest) {
-                console.warn(`Key ...${key.slice(-4)} failed (${isQuotaError ? 'Quota' : (isAuthError ? 'Auth' : 'BadReq')}). Switching to next key...`);
+                console.warn(`Key ...${key.slice(-4)} failed (${isQuotaError ? 'Quota' : 'Auth/Bad'}). Switching to next key...`);
                 
                 if (i === keys.length - 1) {
                     break;
@@ -146,13 +156,14 @@ export const testApiConnection = async (apiKey: string, baseUrl: string, model: 
   const ai = new GoogleGenAI(clientOptions);
   
   try {
+      // Simplified payload for connection test to reduce 400 errors from strict parsing
       await ai.models.generateContent({
         model: model,
-        contents: { parts: [{ text: 'Ping' }] }
+        contents: "Ping" // Simple string, let SDK handle the rest
       });
       return true;
   } catch (error) {
-      console.error("Connection Test Error:", error);
+      console.error("Connection Test Error Raw:", error);
       const msg = formatError(error, "连接测试失败");
       throw new Error(msg);
   }

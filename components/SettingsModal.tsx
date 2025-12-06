@@ -63,14 +63,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
     onClose();
   };
 
+  const cleanInputKey = (key: string): string => {
+      // Basic cleaning for input
+      return key.trim().replace(/^['"]+|['"]+$/g, '').replace(/[\s\uFEFF\xA0]+/g, '');
+  };
+
   const handleAddKey = async () => {
-      const cleanedKey = newKey.trim().replace(/[\s\uFEFF\xA0]+/g, '');
+      const cleanedKey = cleanInputKey(newKey);
       if (!cleanedKey) return;
       
       if (localSettings.apiKeys.includes(cleanedKey)) {
           showToast("该 Key 已存在", "error");
           return;
       }
+
+      // Basic structure check warning (but don't block)
+      if (!cleanedKey.startsWith('AIza') && !cleanedKey.startsWith('sk-')) {
+          showToast("提示: Key 格式似乎不标准 (通常以 AIza 或 sk- 开头)", "info");
+      }
+
       setLocalSettings(prev => ({
           ...prev,
           apiKeys: [...prev.apiKeys, cleanedKey]
@@ -100,7 +111,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
     setTestingIndex(index);
     // Sanitize before testing
     const cleanUrl = localSettings.baseUrl?.trim().replace(/\/+$/, '');
-    const cleanKey = key.trim().replace(/[\s\uFEFF\xA0]+/g, '');
+    const cleanKey = cleanInputKey(key);
 
     try {
         await testApiConnection(cleanKey, cleanUrl || '');
@@ -117,7 +128,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   // Batch Logic
   const parseBatchKeys = (text: string): string[] => {
       const keys = text.split('\n')
-          .map(k => k.trim().replace(/[\s\uFEFF\xA0]+/g, ''))
+          .map(k => cleanInputKey(k))
           .filter(k => k.length > 0);
       return Array.from(new Set(keys)); // Deduplicate
   };
@@ -255,7 +266,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                                 value={newKey}
                                 onChange={e => setNewKey(e.target.value)}
                                 onKeyDown={e => e.key === 'Enter' && handleAddKey()}
-                                placeholder="输入单个 API Key (sk-...)"
+                                placeholder="输入 API Key (自动去引号/空格)"
                                 className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[var(--brand-color)] outline-none text-sm font-mono"
                             />
                             <Button onClick={handleAddKey} disabled={!newKey.trim()} variant="secondary" className="whitespace-nowrap">
