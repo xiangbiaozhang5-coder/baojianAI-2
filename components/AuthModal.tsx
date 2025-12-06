@@ -1,8 +1,5 @@
 import React, { useState } from 'react';
-import { Button } from './Button';
-import { Key, Activity, CheckCircle, AlertCircle, ShieldCheck } from 'lucide-react';
-import { testApiConnection } from '../services/geminiService';
-import { Settings } from '../types';
+import { Activity, CheckCircle, AlertCircle, ShieldCheck, Key, ArrowRight, Lock } from 'lucide-react';
 import { storage } from '../utils/storage';
 
 interface AuthModalProps {
@@ -10,109 +7,156 @@ interface AuthModalProps {
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({ onAuthenticated }) => {
-  const [apiKey, setApiKey] = useState('');
-  const [isTesting, setIsTesting] = useState(false);
+  const [keyCode, setKeyCode] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
-  const handleTestAndEnter = async () => {
-    if (!apiKey.trim()) {
-        setErrorMsg('请输入 API Key');
+  const handleLogin = async () => {
+    if (!keyCode.trim()) {
+        setErrorMsg('请输入卡密');
         return;
     }
     
-    setIsTesting(true);
+    setIsVerifying(true);
     setErrorMsg('');
     setSuccessMsg('');
 
+    // Setup Timeout to prevent hanging
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s Timeout
+
     try {
-        const currentSettings = storage.getSettings();
-        await testApiConnection(apiKey, currentSettings.baseUrl);
-        setSuccessMsg('连接成功！正在进入系统...');
-        
-        // Save to storage
-        const newSettings: Settings = {
-            ...currentSettings,
-            apiKeys: [apiKey.trim()]
-        };
-        storage.saveSettings(newSettings);
-        
-        // Slight delay for UX
-        setTimeout(() => {
-            onAuthenticated();
-        }, 1000);
+        let hwId = localStorage.getItem('hw_id');
+        if (!hwId) {
+            hwId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+            localStorage.setItem('hw_id', hwId);
+        }
+
+        const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keyCode: keyCode.trim(), hardwareId: hwId }),
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        const data = await res.json();
+
+        if (res.ok) {
+            storage.setAuth(data.token, data.user);
+            setSuccessMsg('验证通过');
+            
+            // IMMEDIATE JUMP: Reduced delay from 800ms to 100ms
+            setTimeout(() => {
+                onAuthenticated();
+            }, 100);
+        } else {
+            setErrorMsg(data.error || '登录失败');
+            setIsVerifying(false);
+        }
 
     } catch (e: any) {
-        setErrorMsg(e.message || '连接失败，请检查 Key 是否正确');
-    } finally {
-        setIsTesting(false);
+        if (e.name === 'AbortError') {
+            setErrorMsg('连接超时，请检查网络');
+        } else {
+            setErrorMsg('无法连接到服务器');
+        }
+        setIsVerifying(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-gray-900 z-[100] flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-300">
-            <div className="bg-[var(--brand-color)] p-6 text-center">
-                <div className="mx-auto bg-white/20 w-16 h-16 rounded-full flex items-center justify-center mb-4 backdrop-blur-sm">
-                    <ShieldCheck size={32} className="text-white" />
+    <div className="fixed inset-0 bg-gray-900/90 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-hidden">
+        {/* Decorative Background Blobs */}
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-[var(--brand-color)] rounded-full mix-blend-multiply filter blur-[128px] opacity-20 animate-pulse"></div>
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-500 rounded-full mix-blend-multiply filter blur-[128px] opacity-20 animate-pulse" style={{ animationDelay: '2s' }}></div>
+
+        {/* Card Container */}
+        <div className="bg-white/95 backdrop-blur-xl rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-500 border border-white/40 relative z-10">
+            
+            {/* Top Brand Area */}
+            <div className="relative pt-10 pb-6 flex flex-col items-center">
+                <div className="w-20 h-20 bg-gradient-to-tr from-[var(--brand-color)] to-orange-500 rounded-2xl flex items-center justify-center shadow-lg shadow-orange-500/30 mb-5 transform rotate-3 hover:rotate-0 transition-all duration-500 cursor-default group">
+                    <ShieldCheck size={40} className="text-white group-hover:scale-110 transition-transform" />
                 </div>
-                <h2 className="text-2xl font-bold text-white">欢迎使用 豹剪AI</h2>
-                <p className="text-white/80 text-sm mt-1">请验证身份以继续</p>
+
+                <h2 className="text-3xl font-black text-gray-800 tracking-tight mb-1">
+                    欢迎登录
+                </h2>
+                <p className="text-gray-500 text-sm font-medium">
+                    BaoJian AI 智能分镜系统
+                </p>
             </div>
 
-            <div className="p-8 space-y-6">
-                <div className="space-y-2">
-                    <label className="block text-sm font-medium text-gray-700">Gemini 官方 API Key</label>
-                    <div className="relative">
-                        <Key className="absolute left-3 top-3 text-gray-400" size={18} />
+            {/* Input Area */}
+            <div className="px-8 pb-8 space-y-5">
+                <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-gray-400 ml-1 uppercase tracking-wider">Access Key (卡密)</label>
+                    <div className="relative group">
+                        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                            <Key className="text-gray-400 group-focus-within:text-[var(--brand-color)] transition-colors" size={18} />
+                        </div>
                         <input 
-                            type="password" 
-                            value={apiKey}
+                            type="text" 
+                            value={keyCode}
                             onChange={(e) => {
-                                setApiKey(e.target.value);
+                                setKeyCode(e.target.value);
                                 setErrorMsg('');
                             }}
-                            className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[var(--brand-color)] focus:border-transparent outline-none transition-all"
-                            placeholder="sk-..."
+                            onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                            className="w-full pl-11 pr-4 py-4 bg-gray-50 border border-gray-200 rounded-xl focus:ring-4 focus:ring-[var(--brand-color)]/20 focus:border-[var(--brand-color)] outline-none transition-all font-mono text-gray-800 font-bold placeholder-gray-400 text-base shadow-inner"
+                            placeholder="BJ-XXXX-XXXX-XXXX"
                         />
                     </div>
-                    <p className="text-xs text-gray-500">
-                        我们需要验证您的官方 API Key 才能连接服务。
-                    </p>
                 </div>
 
+                {/* Messages */}
                 {errorMsg && (
-                    <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm flex items-center gap-2 animate-in slide-in-from-top-2">
-                        <AlertCircle size={16} className="shrink-0" />
-                        {errorMsg}
+                    <div className="bg-red-50 text-red-600 p-3 rounded-xl text-sm flex items-center gap-3 animate-in slide-in-from-top-2 border border-red-100">
+                        <AlertCircle size={18} className="shrink-0" />
+                        <span className="font-medium">{errorMsg}</span>
                     </div>
                 )}
 
                 {successMsg && (
-                    <div className="bg-green-50 text-green-600 p-3 rounded-lg text-sm flex items-center gap-2 animate-in slide-in-from-top-2">
-                        <CheckCircle size={16} className="shrink-0" />
-                        {successMsg}
+                    <div className="bg-green-50 text-green-600 p-3 rounded-xl text-sm flex items-center gap-3 animate-in slide-in-from-top-2 border border-green-100">
+                        <CheckCircle size={18} className="shrink-0" />
+                        <span className="font-medium">{successMsg}</span>
                     </div>
                 )}
 
-                <Button 
-                    onClick={handleTestAndEnter} 
-                    disabled={isTesting || !apiKey} 
-                    className="w-full py-4 text-lg shadow-xl shadow-[var(--brand-color)]/20"
+                {/* Big Login Button */}
+                <button 
+                    onClick={handleLogin} 
+                    disabled={isVerifying || !keyCode}
+                    className="w-full group relative py-4 bg-gradient-to-r from-[var(--brand-color)] to-orange-600 text-white font-bold rounded-xl shadow-lg shadow-orange-500/30 hover:shadow-orange-500/50 transform hover:-translate-y-0.5 transition-all disabled:opacity-70 disabled:cursor-not-allowed disabled:transform-none overflow-hidden"
                 >
-                    {isTesting ? (
-                        <>
-                            <Activity className="animate-spin mr-2" />
-                            正在验证...
-                        </>
-                    ) : (
-                        '确定并进入'
-                    )}
-                </Button>
+                    <div className="relative z-10 flex items-center justify-center gap-2">
+                        {isVerifying ? (
+                            <>
+                                <Activity className="animate-spin" size={20} />
+                                <span>验证中...</span>
+                            </>
+                        ) : (
+                            <>
+                                <span className="text-lg">立即登录</span>
+                                <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" />
+                            </>
+                        )}
+                    </div>
+                    {/* Button Shine Effect */}
+                    <div className="absolute inset-0 h-full w-full bg-white/20 scale-x-0 group-hover:scale-x-100 transition-transform origin-left duration-300"></div>
+                </button>
             </div>
             
-            <div className="bg-gray-50 p-4 text-center text-xs text-gray-400 border-t border-gray-100">
-                本软件仅连接 Google Gemini 官方接口，不经由第三方代理。
+            {/* Footer */}
+            <div className="bg-gray-50 p-4 text-center border-t border-gray-100">
+                <p className="text-[10px] text-gray-400 flex items-center justify-center gap-1.5 font-medium">
+                    <Lock size={10} />
+                    安全加密连接 · 请联系管理员获取卡密
+                </p>
             </div>
         </div>
     </div>
