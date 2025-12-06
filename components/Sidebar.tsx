@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, Users, Settings, Wrench, PenTool } from 'lucide-react';
+import { Home, Users, Settings, PenTool, LayoutDashboard } from 'lucide-react';
 import { ViewState } from '../types';
 
 interface SidebarProps {
@@ -8,63 +8,76 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView }) => {
+  const NavItem = ({ view, icon: Icon, label }: { view: ViewState, icon: any, label: string }) => {
+    const isActive = currentView === view;
+    return (
+        <button
+            onClick={() => onChangeView(view)}
+            className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl transition-all duration-200 group ${
+              isActive 
+                ? 'bg-[var(--brand-color)] text-white shadow-lg shadow-[var(--brand-color)]/30 translate-x-1' 
+                : 'text-slate-500 hover:bg-white hover:text-slate-800 hover:shadow-sm'
+            }`}
+        >
+            <Icon size={20} className={`${isActive ? 'text-white' : 'text-slate-400 group-hover:text-slate-600'}`} />
+            <span className={`font-medium tracking-wide ${isActive ? 'font-bold' : ''}`}>{label}</span>
+        </button>
+    );
+  };
+
   return (
-    <div className="w-64 bg-white border-r border-gray-200 flex flex-col h-screen fixed left-0 top-0 z-10">
-      <div className="p-6 flex items-center space-x-2">
-        <div className="w-8 h-8 bg-brand-500 rounded-full flex items-center justify-center text-white font-bold text-lg">
+    <div className="w-72 bg-slate-50/80 backdrop-blur-xl border-r border-slate-200/60 flex flex-col h-screen fixed left-0 top-0 z-30 shadow-sm">
+      {/* Brand */}
+      <div className="p-8 flex items-center space-x-3">
+        <div className="w-10 h-10 bg-gradient-to-tr from-[var(--brand-color)] to-orange-400 rounded-xl flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-[var(--brand-color)]/20">
           宝
         </div>
-        <span className="text-xl font-bold text-gray-900 tracking-tight">宝鉴 AI 分镜</span>
+        <div>
+            <h1 className="text-xl font-black text-slate-800 tracking-tight leading-none">宝鉴 AI</h1>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Storyboard Pro</span>
+        </div>
       </div>
 
-      <div className="px-4 mb-4">
+      {/* CTA */}
+      <div className="px-6 mb-8">
         <button 
             onClick={() => onChangeView('drafts')}
-            className="w-full bg-brand-500 hover:bg-brand-600 text-white py-3 rounded-lg flex items-center justify-center space-x-2 font-bold shadow-lg shadow-brand-500/20 transition-all"
+            className="w-full bg-white border border-slate-200 text-slate-700 hover:border-[var(--brand-color)] hover:text-[var(--brand-color)] py-4 rounded-2xl flex items-center justify-center space-x-2 font-bold shadow-sm hover:shadow-md transition-all group"
         >
-            <PenTool size={20} />
-            <span>开始创作</span>
+            <PenTool size={18} className="group-hover:-translate-y-0.5 group-hover:translate-x-0.5 transition-transform" />
+            <span>开始新创作</span>
         </button>
       </div>
 
-      <nav className="flex-1 px-4 space-y-1">
-        <button
-            onClick={() => onChangeView('drafts')}
-            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-all duration-200 ${
-              currentView === 'drafts' 
-                ? 'bg-brand-50 text-brand-600 font-semibold' 
-                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-            }`}
-        >
-            <Home size={20} />
-            <span>我的草稿</span>
-        </button>
-
-        <button
-            onClick={() => onChangeView('characters')}
-            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-all duration-200 ${
-              currentView === 'characters' 
-                ? 'bg-brand-50 text-brand-600 font-semibold' 
-                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-            }`}
-        >
-            <Users size={20} />
-            <span>主体库</span>
-        </button>
+      {/* Navigation */}
+      <nav className="flex-1 px-4 space-y-2">
+        <div className="px-4 text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">工作台</div>
+        <NavItem view="drafts" icon={LayoutDashboard} label="我的草稿" />
+        <NavItem view="characters" icon={Users} label="主体角色库" />
         
-        <div className="pt-4 mt-4 border-t border-gray-100">
-             <button 
+        <div className="pt-6 mt-6 border-t border-slate-200/60">
+            <div className="px-4 text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">系统</div>
+            <button 
                 onClick={() => onChangeView('settings')}
-                className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-gray-600 hover:bg-gray-50"
-             >
-                <Settings size={20} />
-                <span>系统设置</span>
-             </button>
+                className="w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl text-slate-500 hover:bg-white hover:text-slate-800 hover:shadow-sm transition-all duration-200"
+            >
+                <Settings size={20} className="text-slate-400" />
+                <span className="font-medium tracking-wide">系统设置</span>
+            </button>
         </div>
       </nav>
 
-      <div className="p-4 border-t border-gray-100 text-xs text-gray-400 text-center">
-        v2.0.0 BaoJian Storyboard
+      {/* Footer */}
+      <div className="p-6">
+         <div className="bg-slate-100 rounded-xl p-4 flex items-center space-x-3 border border-slate-200">
+             <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold text-slate-500">
+                 V2
+             </div>
+             <div className="flex-1 overflow-hidden">
+                 <div className="text-xs font-bold text-slate-700 truncate">本地离线版</div>
+                 <div className="text-[10px] text-slate-400 truncate">数据存储在本地</div>
+             </div>
+         </div>
       </div>
     </div>
   );

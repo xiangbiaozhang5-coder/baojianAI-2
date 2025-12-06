@@ -5,7 +5,6 @@ import { CharacterLibrary } from './components/CharacterLibrary';
 import { StoryboardEditor } from './components/StoryboardEditor';
 import { SettingsModal } from './components/SettingsModal';
 import { ToastContainer } from './components/Toast';
-import { AuthModal } from './components/AuthModal';
 import { AdminPanel } from './components/AdminPanel';
 import { ViewState, Project, Character, Settings, ToastMessage, GenerationModel } from './types';
 import { storage } from './utils/storage';
@@ -13,10 +12,6 @@ import { parseSRT } from './utils/srtParser';
 import { formatScriptText } from './utils/scriptParser';
 
 const App: React.FC = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [userType, setUserType] = useState<'user' | 'admin'>('user');
-  const [isAdminOpen, setIsAdminOpen] = useState(false);
-
   // Application State
   const [currentView, setCurrentView] = useState<ViewState>('drafts');
   const [projects, setProjects] = useState<Project[]>([]);
@@ -26,16 +21,12 @@ const App: React.FC = () => {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [settings, setSettings] = useState<Settings>(storage.getSettings());
   
-  // Auth Check
+  // Admin panel state (Optional: keep if you still want a hidden entry, or remove. I'll remove for now as auth is gone)
+  const [isAdminOpen, setIsAdminOpen] = useState(false);
+
+  // Load Data on Mount
   useEffect(() => {
-    if (storage.isAuthenticated()) {
-        setIsAuthenticated(true);
-        const user = storage.getUser();
-        if (user && user.type === 'admin') setUserType('admin');
-        
-        // Load data after auth
-        loadData();
-    }
+    loadData();
   }, []);
 
   const loadData = async () => {
@@ -45,21 +36,6 @@ const App: React.FC = () => {
     setCharacters(c);
     const s = await storage.loadSettings();
     setSettings(s);
-  };
-
-  const handleAuthenticated = () => {
-    setIsAuthenticated(true);
-    const user = storage.getUser();
-    if (user && user.type === 'admin') setUserType('admin');
-    loadData();
-    showToast('欢迎回来！', 'success');
-  };
-
-  const handleLogout = () => {
-      storage.clearAuth();
-      setIsAuthenticated(false);
-      setProjects([]);
-      setCharacters([]);
   };
 
   // Toast Handler
@@ -72,7 +48,6 @@ const App: React.FC = () => {
     setToasts(prev => prev.filter(t => t.id !== id));
   };
 
-  // ... (Project CRUD handlers same as before)
   const handleCreateProject = async (name: string, srtFile: File | null) => {
     let initialFrames: any[] = [];
     if (srtFile) {
@@ -107,7 +82,7 @@ const App: React.FC = () => {
     // Optimistic UI update
     const updated = [newProject, ...projects];
     setProjects(updated);
-    storage.saveSingleProject(newProject); // Use specific save to ensure it pushes to server
+    storage.saveSingleProject(newProject);
     
     setActiveProjectId(newProject.id);
     setCurrentView('editor');
@@ -160,15 +135,6 @@ const App: React.FC = () => {
       }
   };
 
-  if (!isAuthenticated) {
-      return (
-          <>
-            <ToastContainer toasts={toasts} removeToast={removeToast} />
-            <AuthModal onAuthenticated={handleAuthenticated} />
-          </>
-      );
-  }
-
   const renderContent = () => {
     if (currentView === 'editor' && activeProjectId) {
       const activeProject = projects.find(p => p.id === activeProjectId);
@@ -188,39 +154,30 @@ const App: React.FC = () => {
     }
 
     return (
-      <div className="flex h-screen bg-gray-50">
-        <div className="relative">
+      <div className="flex h-screen bg-[#f8fafc]"> {/* Lighter background */}
+        <div className="relative z-20">
             <Sidebar currentView={currentView} onChangeView={handleViewChange} />
-            {/* Admin & Logout Controls */}
-            <div className="fixed bottom-4 left-4 w-56 flex flex-col gap-2">
-                {userType === 'admin' && (
-                    <button onClick={() => setIsAdminOpen(true)} className="bg-gray-900 text-white p-2 rounded text-sm w-full">
-                        管理员后台
-                    </button>
-                )}
-                <button onClick={handleLogout} className="text-gray-500 hover:text-red-500 text-xs text-center w-full py-2">
-                    退出登录
-                </button>
-            </div>
         </div>
         
-        <main className="flex-1 ml-64 overflow-y-auto">
-          {currentView === 'drafts' && (
-            <DraftsList 
-              projects={projects} 
-              onDelete={handleDeleteProject}
-              onEdit={handleEditProject}
-              onCreate={handleCreateProject}
-            />
-          )}
-          {currentView === 'characters' && (
-            <CharacterLibrary 
-              characters={characters}
-              onAddCharacter={handleAddCharacter}
-              onUpdateCharacter={(updated) => handleUpdateCharacters(characters.map(c => c.id === updated.id ? updated : c))}
-              onDeleteCharacter={handleDeleteCharacter}
-            />
-          )}
+        <main className="flex-1 ml-72 overflow-y-auto custom-scrollbar p-6">
+          <div className="max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
+            {currentView === 'drafts' && (
+                <DraftsList 
+                projects={projects} 
+                onDelete={handleDeleteProject}
+                onEdit={handleEditProject}
+                onCreate={handleCreateProject}
+                />
+            )}
+            {currentView === 'characters' && (
+                <CharacterLibrary 
+                characters={characters}
+                onAddCharacter={handleAddCharacter}
+                onUpdateCharacter={(updated) => handleUpdateCharacters(characters.map(c => c.id === updated.id ? updated : c))}
+                onDeleteCharacter={handleDeleteCharacter}
+                />
+            )}
+          </div>
         </main>
       </div>
     );
