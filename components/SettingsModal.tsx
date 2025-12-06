@@ -1,7 +1,8 @@
+
 import React, { useState, useEffect } from 'react';
 import { Settings, GenerationModel, TEXT_MODELS } from '../types';
 import { Button } from './Button';
-import { X, Save, Palette, Key, Plus, Trash2, Check, AlertTriangle, Loader2, Globe } from 'lucide-react';
+import { X, Save, Palette, Key, Plus, Trash2, Check, AlertTriangle, Loader2, Globe, Edit, List, FileText } from 'lucide-react';
 import { storage } from '../utils/storage';
 import { testApiConnection } from '../services/geminiService';
 
@@ -25,24 +26,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   const [newKey, setNewKey] = useState('');
   const [testingIndex, setTestingIndex] = useState<number | null>(null);
   const [keyStatuses, setKeyStatuses] = useState<Record<number, 'valid' | 'invalid' | null>>({});
+  
+  // Batch Mode State
+  const [isBatchEdit, setIsBatchEdit] = useState(false);
+  const [batchText, setBatchText] = useState('');
 
   useEffect(() => {
     if (isOpen) {
       setLocalSettings(storage.getSettings());
       setNewKey('');
       setKeyStatuses({});
+      setIsBatchEdit(false);
     }
   }, [isOpen]);
 
   const handleSave = () => {
-    if (localSettings.apiKeys.length === 0) {
+    // If saving while in batch mode, save the batch text first
+    let finalKeys = localSettings.apiKeys;
+    if (isBatchEdit) {
+        finalKeys = parseBatchKeys(batchText);
+    }
+
+    if (finalKeys.length === 0) {
         showToast("警告：未配置 API Key，功能可能无法使用", "info");
     }
+
     // Deep trim all keys and url before saving
     const cleanedSettings = {
         ...localSettings,
-        baseUrl: localSettings.baseUrl?.trim().replace(/\/+$/, '') || '', // Remove trailing slash
-        apiKeys: localSettings.apiKeys.map(k => k.trim().replace(/[\s\uFEFF\xA0]+/g, '')).filter(k => k.length > 0)
+        apiKeys: finalKeys,
+        baseUrl: localSettings.baseUrl?.trim().replace(/\/+$/, '') || ''
     };
 
     storage.saveSettings(cleanedSettings);
@@ -74,6 +87,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
       delete newStatuses[index];
       setKeyStatuses(newStatuses);
   };
+  
+  const handleClearAllKeys = () => {
+      if (confirm(`确定要删除全部 ${localSettings.apiKeys.length} 个 API Key 吗？`)) {
+          setLocalSettings(prev => ({ ...prev, apiKeys: [] }));
+          setKeyStatuses({});
+          showToast("已清空所有 API Key", "info");
+      }
+  };
 
   const handleTestKey = async (key: string, index: number) => {
     setTestingIndex(index);
@@ -91,6 +112,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
     } finally {
         setTestingIndex(null);
     }
+  };
+  
+  // Batch Logic
+  const parseBatchKeys = (text: string): string[] => {
+      const keys = text.split('\n')
+          .map(k => k.trim().replace(/[\s\uFEFF\xA0]+/g, ''))
+          .filter(k => k.length > 0);
+      return Array.from(new Set(keys)); // Deduplicate
+  };
+
+  const toggleBatchMode = () => {
+      if (!isBatchEdit) {
+          // Enter batch mode
+          setBatchText(localSettings.apiKeys.join('\n'));
+      } else {
+          // Exit batch mode (Save)
+          const newKeys = parseBatchKeys(batchText);
+          setLocalSettings(prev => ({ ...prev, apiKeys: newKeys }));
+          setKeyStatuses({}); // Reset statuses as indices change
+      }
+      setIsBatchEdit(!isBatchEdit);
   };
 
   if (!isOpen) return null;
@@ -127,56 +169,101 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                 />
                 <p className="text-[10px] text-gray-400 mt-1">
                     默认为空 (或官方地址)。若使用第三方代理，请填写完整地址 (例如: https://proxy.example.com)。
-                    <br/>注意：不需要添加 `/v1beta` 后缀，SDK会自动处理。
                 </p>
             </div>
             
             <div className="space-y-3">
-                 <label className="block text-sm font-medium text-gray-700">API Key 管理 (可添加多个以自动轮询)</label>
-                {localSettings.apiKeys.map((key, index) => (
-                    <div key={index} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200">
-                        <div className="w-8 h-8 rounded-full bg-white border border-gray-200 flex items-center justify-center text-xs font-bold text-gray-500">
-                            {index + 1}
-                        </div>
-                        <input 
-                            type="password" 
-                            value={key}
-                            readOnly 
-                            className="flex-1 bg-transparent border-none text-gray-600 text-sm focus:ring-0" 
+                 <div className="flex justify-between items-end">
+                     <label className="block text-sm font-medium text-gray-700">API Key 管理 (可添加多个以自动轮询)</label>
+                     <div className="flex gap-3">
+                        {!isBatchEdit && localSettings.apiKeys.length > 0 && (
+                            <button 
+                                onClick={handleClearAllKeys} 
+                                className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1 hover:underline"
+                            >
+                                <Trash2 size={12} /> 清空全部
+                            </button>
+                        )}
+                        <button 
+                            onClick={toggleBatchMode} 
+                            className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 font-medium bg-blue-50 px-2 py-1 rounded border border-blue-100"
+                        >
+                            {isBatchEdit ? <List size={12}/> : <FileText size={12}/>}
+                            {isBatchEdit ? "返回列表模式" : "批量文本管理"}
+                        </button>
+                     </div>
+                 </div>
+                
+                {isBatchEdit ? (
+                    <div className="animate-in fade-in zoom-in-95">
+                        <textarea 
+                            className="w-full h-64 p-3 border border-gray-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-[var(--brand-color)] outline-none resize-none bg-gray-50"
+                            placeholder={`sk-abc123...\nsk-def456...\nsk-ghi789...`}
+                            value={batchText}
+                            onChange={e => setBatchText(e.target.value)}
                         />
-                        
-                        {keyStatuses[index] === 'valid' && <Check size={16} className="text-green-500" />}
-                        {keyStatuses[index] === 'invalid' && <AlertTriangle size={16} className="text-red-500" />}
-
-                        <button 
-                            onClick={() => handleTestKey(key, index)}
-                            disabled={testingIndex === index}
-                            className="text-xs px-2 py-1 bg-white border border-gray-200 rounded hover:bg-gray-100 text-gray-600 flex items-center gap-1"
-                        >
-                            {testingIndex === index ? <Loader2 size={12} className="animate-spin"/> : "测试连接"}
-                        </button>
-
-                        <button 
-                            onClick={() => handleRemoveKey(index)}
-                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"
-                        >
-                            <Trash2 size={16} />
-                        </button>
+                        <p className="text-[10px] text-gray-500 mt-1 flex justify-between">
+                            <span>请粘贴您的 API Key，一行一个。保存时会自动去重。</span>
+                            <span className="font-bold text-[var(--brand-color)]">当前行数: {batchText.split('\n').filter(l=>l.trim()).length}</span>
+                        </p>
                     </div>
-                ))}
+                ) : (
+                    <>
+                        <div className="max-h-60 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                            {localSettings.apiKeys.length === 0 && (
+                                <div className="text-center py-8 text-gray-400 text-xs border-2 border-dashed border-gray-200 rounded-lg">
+                                    暂无 API Key，请添加
+                                </div>
+                            )}
+                            {localSettings.apiKeys.map((key, index) => (
+                                <div key={index} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200 hover:border-gray-300 transition-colors">
+                                    <div className="w-6 h-6 rounded-full bg-white border border-gray-200 flex items-center justify-center text-[10px] font-bold text-gray-500 shrink-0">
+                                        {index + 1}
+                                    </div>
+                                    <input 
+                                        type="password" 
+                                        value={key}
+                                        readOnly 
+                                        className="flex-1 bg-transparent border-none text-gray-600 text-xs focus:ring-0 font-mono" 
+                                    />
+                                    
+                                    {keyStatuses[index] === 'valid' && <Check size={14} className="text-green-500" />}
+                                    {keyStatuses[index] === 'invalid' && <AlertTriangle size={14} className="text-red-500" />}
 
-                <div className="flex gap-2 pt-2">
-                    <input 
-                        type="password"
-                        value={newKey}
-                        onChange={e => setNewKey(e.target.value)}
-                        placeholder="输入 Gemini API Key (sk-...)"
-                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[var(--brand-color)] outline-none text-sm"
-                    />
-                    <Button onClick={handleAddKey} disabled={!newKey.trim()} variant="secondary">
-                        <Plus size={16} className="mr-1" /> 添加
-                    </Button>
-                </div>
+                                    <button 
+                                        onClick={() => handleTestKey(key, index)}
+                                        disabled={testingIndex === index}
+                                        className="text-[10px] px-2 py-1 bg-white border border-gray-200 rounded hover:bg-gray-100 text-gray-600 flex items-center gap-1 whitespace-nowrap"
+                                    >
+                                        {testingIndex === index ? <Loader2 size={10} className="animate-spin"/> : "测试"}
+                                    </button>
+
+                                    <button 
+                                        onClick={() => handleRemoveKey(index)}
+                                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"
+                                        title="删除"
+                                    >
+                                        <X size={14} />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="flex gap-2 pt-2 border-t border-gray-50 mt-2">
+                            <input 
+                                type="password"
+                                value={newKey}
+                                onChange={e => setNewKey(e.target.value)}
+                                onKeyDown={e => e.key === 'Enter' && handleAddKey()}
+                                placeholder="输入单个 API Key (sk-...)"
+                                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[var(--brand-color)] outline-none text-sm font-mono"
+                            />
+                            <Button onClick={handleAddKey} disabled={!newKey.trim()} variant="secondary" className="whitespace-nowrap">
+                                <Plus size={16} className="mr-1" /> 添加
+                            </Button>
+                        </div>
+                    </>
+                )}
             </div>
           </div>
 
@@ -206,7 +293,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                     <select 
                         value={localSettings.textModel}
                         onChange={e => setLocalSettings({...localSettings, textModel: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                     >
                         {TEXT_MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                     </select>
@@ -216,7 +303,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                     <select 
                         value={localSettings.imageModel}
                         onChange={e => setLocalSettings({...localSettings, imageModel: e.target.value as GenerationModel})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                     >
                         <option value={GenerationModel.GEMINI_2_5_FLASH_IMAGE}>NanoBanana</option>
                         <option value={GenerationModel.GEMINI_3_PRO_IMAGE_PREVIEW}>NanoBanana Pro</option>
