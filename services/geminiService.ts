@@ -2,232 +2,155 @@
 import { GoogleGenAI } from "@google/genai";
 import { GenerationModel, Settings, Character } from "../types";
 
-// Helper to clean Base URL for New API / One API compatibility
+// --- Helpers ---
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Clean Base URL
 const cleanBaseUrl = (url?: string): string | undefined => {
     if (!url || !url.trim()) return undefined; 
-    
     let cleaned = url.trim();
-    
-    // 1. Remove trailing slashes
+    cleaned = cleaned.replace(/\/+$/, '');
+    if (cleaned.endsWith('/v1beta')) cleaned = cleaned.substring(0, cleaned.length - 7);
+    if (cleaned.endsWith('/v1')) cleaned = cleaned.substring(0, cleaned.length - 3);
     cleaned = cleaned.replace(/\/+$/, '');
     
-    // 2. Remove version suffixes often pasted by mistake (SDK adds these automatically)
-    // Many New API users might paste "https://api.com/v1", but SDK wants "https://api.com"
-    if (cleaned.endsWith('/v1beta')) {
-        cleaned = cleaned.substring(0, cleaned.length - 7);
-    } else if (cleaned.endsWith('/v1')) {
-        cleaned = cleaned.substring(0, cleaned.length - 3);
-    }
-    
-    // Remove trailing slash again just in case
-    cleaned = cleaned.replace(/\/+$/, '');
-
-    // If user explicitly entered the official URL, treat it as undefined (default)
     if (cleaned === 'https://generativelanguage.googleapis.com') return undefined;
-    
     return cleaned;
 };
 
-// Helper to clean API Key
 const cleanApiKey = (key: string): string => {
     if (!key) return "";
-    // Remove all whitespace, newlines, and non-breaking spaces
-    // Also remove common prefixes like "Bearer " if user pasted header
-    return key.replace(/[\s\uFEFF\xA0]+/g, '').replace(/^Bearer/i, '');
+    return key.replace(/[\s\uFEFF\xA0]+/g, '').replace(/^Bearer\s+/i, '');
 };
 
-// Helper to format error messages
-const formatError = (error: any, context: string): string => {
+const extractJSON = (text: string): any => {
+    try {
+        return JSON.parse(text);
+    } catch (e) {
+        const match = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (match && match[1]) {
+            try { return JSON.parse(match[1]); } catch (e2) {}
+        }
+        const firstOpen = text.search(/[\{\[]/);
+        const lastClose = text.search(/[\}\]]$/);
+        if (firstOpen !== -1) {
+             const sub = text.substring(firstOpen);
+             const lastBrace = sub.lastIndexOf('}');
+             const lastBracket = sub.lastIndexOf(']');
+             const end = Math.max(lastBrace, lastBracket);
+             if (end !== -1) {
+                 try { return JSON.parse(sub.substring(0, end + 1)); } catch (e3) {}
+             }
+        }
+        throw new Error("Invalid JSON response from AI");
+    }
+};
+
+const formatError = (error: any): string => {
   let msg = error instanceof Error ? error.message : String(error);
-  
-  if (msg.includes('400')) msg = '请求无效 (400) - 请检查 API Key 是否正确，或代理地址是否支持该模型';
-  else if (msg.includes('401')) msg = 'API Key 无效或未授权 (401)';
-  else if (msg.includes('403')) msg = 'API Key 权限不足 (403)';
-  else if (msg.includes('404')) msg = '地址错误 (404) - 请检查代理地址是否正确 (不要填 /v1beta)';
-  else if (msg.includes('429')) msg = '请求过于频繁/额度耗尽 (429)';
-  else if (msg.includes('500')) msg = 'AI 服务内部错误 (500)';
-  else if (msg.includes('503')) msg = '服务暂时不可用 (503)';
-  else if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) msg = '网络连接失败 (检查网络/代理配置)';
-  
-  return `${context}: ${msg}`;
+  if (msg.includes('400')) return '请求无效 (400) - 请检查 API Key 或模型';
+  if (msg.includes('401')) return '鉴权失败 (401) - API Key 无效';
+  if (msg.includes('403')) return '拒绝访问 (403) - 余额不足或无权限';
+  if (msg.includes('404')) return '地址错误 (404) - 接口地址配置错误';
+  if (msg.includes('429')) return '请求过频 (429) - 请稍后重试';
+  if (msg.includes('AbortError') || msg.includes('aborted')) return '操作已取消';
+  if (msg.includes('Failed to fetch')) return '网络连接失败';
+  return msg;
 };
 
-// Helper: Sleep delay
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+// --- Core Execution ---
 
-// Helper: Retry with Exponential Backoff
-const retryOperation = async <T>(
-    operation: () => Promise<T>, 
-    maxRetries: number = 3,
-    baseDelay: number = 2000
+const executeRequest = async <T>(
+    settings: Settings, 
+    operation: (ai: GoogleGenAI) => Promise<T>,
+    retries = 1
 ): Promise<T> => {
-    let lastError: any;
-    
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const apiKey = cleanApiKey(settings.apiKey);
+    const baseUrl = cleanBaseUrl(settings.baseUrl);
+
+    if (!apiKey) throw new Error("未配置 API Key");
+
+    const clientOptions: any = { apiKey };
+    if (baseUrl) clientOptions.baseUrl = baseUrl;
+
+    const ai = new GoogleGenAI(clientOptions);
+
+    let lastError;
+    for (let i = 0; i <= retries; i++) {
         try {
-            return await operation();
+            return await operation(ai);
         } catch (error: any) {
             lastError = error;
-            const msg = error.message || String(error);
-            // Only retry on transient errors or rate limits
-            if (msg.includes('429') || msg.includes('503') || msg.includes('Quota exceeded')) {
-                if (attempt < maxRetries) {
-                    const waitTime = baseDelay * Math.pow(2, attempt); // 2s, 4s, 8s
-                    console.warn(`Hit rate limit (429/503). Retrying in ${waitTime}ms... (Attempt ${attempt + 1}/${maxRetries})`);
-                    await sleep(waitTime);
+            const msg = error.message || "";
+            // Don't retry if aborted
+            if (msg.includes('AbortError') || msg.includes('aborted')) {
+                throw error;
+            }
+            if (msg.includes('429') || msg.includes('503')) {
+                if (i < retries) {
+                    await sleep(2000 * (i + 1));
                     continue;
                 }
             }
-            throw error;
+            break; 
         }
     }
-    throw lastError;
+    throw new Error(formatError(lastError));
 };
 
-/**
- * Execute an API operation with Automatic Key Rotation AND Retry Logic
- */
-const executeWithKeyRotation = async <T>(
-    settings: Settings, 
-    operation: (ai: GoogleGenAI) => Promise<T>,
-    contextName: string
-): Promise<T> => {
-    const keys = settings.apiKeys && settings.apiKeys.length > 0 ? settings.apiKeys : [];
-    
-    if (keys.length === 0) {
-        throw new Error("未配置 API Key，请在设置中添加");
-    }
+// --- Services ---
 
-    const baseUrl = cleanBaseUrl(settings.baseUrl);
-    let lastError: any = null;
-
-    for (let i = 0; i < keys.length; i++) {
-        const key = cleanApiKey(keys[i]);
-        if (!key) continue;
-
-        try {
-            // Initialize SDK with cleaned params
-            const clientOptions: any = { apiKey: key };
-            
-            // Only inject baseUrl if it's a custom proxy (New API / One API)
-            if (baseUrl) {
-                clientOptions.baseUrl = baseUrl;
-            }
-
-            const ai = new GoogleGenAI(clientOptions);
-            
-            // Wrap the specific AI call in a retry block (Handling 429s for THIS key)
-            return await retryOperation(() => operation(ai));
-
-        } catch (error: any) {
-            lastError = error;
-            const msg = error.message || String(error);
-            const isQuotaError = msg.includes('429') || msg.includes('Quota exceeded');
-            const isAuthError = msg.includes('401') || msg.includes('403') || msg.includes('API key not valid');
-            // 400 is often an invalid key format or invalid argument, but we should try next key just in case it's key-specific
-            const isBadRequest = msg.includes('400') || msg.includes('INVALID_ARGUMENT');
-
-            if (isQuotaError || isAuthError || isBadRequest) {
-                console.warn(`Key ...${key.slice(-4)} failed (${isQuotaError ? 'Quota' : (isAuthError ? 'Auth' : 'BadReq')}). Switching to next key...`);
-                
-                if (i === keys.length - 1) {
-                    break;
-                }
-                continue; 
-            } else {
-                throw error;
-            }
-        }
-    }
-
-    const errorMsg = formatError(lastError, contextName);
-    console.error(errorMsg);
-    throw new Error(`${errorMsg} (已尝试所有可用 Key)`);
+export const testApiConnection = async (apiKey: string, baseUrl: string, model: string): Promise<boolean> => {
+    const settings = { apiKey, baseUrl, textModel: model } as Settings;
+    return executeRequest(settings, async (ai) => {
+        await ai.models.generateContent({
+            model: model,
+            contents: { parts: [{ text: 'Ping' }] }
+        });
+        return true;
+    }, 0);
 };
 
-/**
- * Test API Connection (Single Key + URL)
- */
-export const testApiConnection = async (apiKey: string, baseUrl: string, model: string = 'gemini-2.5-flash'): Promise<boolean> => {
-  const cleanKey = cleanApiKey(apiKey);
-  const cleanUrl = cleanBaseUrl(baseUrl);
-  
-  if (!cleanKey) throw new Error("API Key 为空或格式错误");
-  
-  const clientOptions: any = { apiKey: cleanKey };
-  if (cleanUrl) {
-      clientOptions.baseUrl = cleanUrl;
-  }
-  
-  const ai = new GoogleGenAI(clientOptions);
-  
-  try {
-      await ai.models.generateContent({
-        model: model,
-        contents: { parts: [{ text: 'Ping' }] }
-      });
-      return true;
-  } catch (error) {
-      console.error("Connection Test Error:", error);
-      const msg = formatError(error, "连接测试失败");
-      throw new Error(msg);
-  }
-};
-
-/**
- * Image Generation with Style and Character Consistency
- */
 export const generateImage = async (
   prompt: string,
   settings: Settings,
   aspectRatio: string,
   characterImageBase64?: string,
   styleImageBase64?: string,
-  isHD: boolean = false
+  isHD: boolean = false,
+  signal?: AbortSignal
 ): Promise<string> => {
   const model = isHD ? GenerationModel.GEMINI_3_PRO_IMAGE_PREVIEW : settings.imageModel;
 
-  const operation = async (ai: GoogleGenAI) => {
+  return executeRequest(settings, async (ai) => {
+    // Check abort before start
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
     const parts: any[] = [];
     let systemText = "";
 
-    // 1. Add Style Image
     if (styleImageBase64) {
-      const base64Data = styleImageBase64.replace(/^data:image\/\w+;base64,/, "");
-      parts.push({
-        inlineData: {
-          data: base64Data,
-          mimeType: 'image/png',
-        },
-      });
-      systemText += "【Visual Style Reference (Important)】: Analyze the art style, color palette, lighting, and rendering technique of the FIRST provided image. Apply ONLY this visual style to the generation. Do NOT copy the characters, background content, or composition of the style reference image. \n";
+      parts.push({ inlineData: { data: styleImageBase64.replace(/^data:image\/\w+;base64,/, ""), mimeType: 'image/png' } });
+      systemText += "【Style Reference】: Copy the art style (lighting, texture) of the FIRST image. Ignore its content.\n";
     }
-
-    // 2. Add Character Image
     if (characterImageBase64) {
-      const base64Data = characterImageBase64.replace(/^data:image\/\w+;base64,/, "");
-      parts.push({
-        inlineData: {
-          data: base64Data,
-          mimeType: 'image/png',
-        },
-      });
-      systemText += "【Character Reference】: Maintain the character's facial features, hair, and clothing consistent with the provided character reference image. \n";
+      parts.push({ inlineData: { data: characterImageBase64.replace(/^data:image\/\w+;base64,/, ""), mimeType: 'image/png' } });
+      systemText += "【Character Reference】: Maintain character consistency with this image.\n";
     }
 
-    // 3. Add Prompt
     systemText += `【Description】: ${prompt}`;
     parts.push({ text: systemText });
 
     const response = await ai.models.generateContent({
         model: model,
-        contents: { parts: parts },
-        config: {
-            imageConfig: { aspectRatio: aspectRatio },
-        },
+        contents: { parts },
+        config: { imageConfig: { aspectRatio } },
     });
+    
+    // Check abort after response (before processing)
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-    // Robust check for content parts
     const candidate = response.candidates?.[0];
     if (candidate?.content?.parts) {
       for (const part of candidate.content.parts) {
@@ -236,74 +159,10 @@ export const generateImage = async (
         }
       }
     }
-    
-    // Safety check fallback
-    if (candidate?.finishReason) {
-        throw new Error(`生成被阻止 (Reason: ${candidate.finishReason}) - 请尝试修改描述词避免敏感内容`);
-    }
-
-    throw new Error("API 返回了空数据 (可能触发了安全拦截或模型未响应)");
-  };
-
-  return executeWithKeyRotation(settings, operation, "生图失败");
+    throw new Error("生图失败：API 未返回图片数据");
+  });
 };
 
-/**
- * Analyze Script for Roles
- */
-export const analyzeRoles = async (script: string, settings: Settings): Promise<Character[]> => {
-  const safeScript = script.length > 50000 ? script.substring(0, 50000) + "...(truncated)" : script;
-
-  const prompt = `你是一个专业的电影选角导演。请分析以下剧本内容，提取所有主要出现的角色。
-  
-  【提取要求】：
-  1. 忽略“旁白”、“画外音”、“字幕”、“群众”等非具体人物。
-  2. **重要**：description 字段必须严格遵守以下格式规范：
-     "一个[年龄段][性别]，[数字]岁，[发型及发色]，身穿[衣着及颜色]"。
-     例如："一个青年男性，25岁，黑色短发，身穿白色T恤和蓝色牛仔裤"。
-  3. 如果剧本未提及具体外貌，请根据角色身份进行合理的专业想象补全，必须包含衣服和颜色。
-  
-  【输出格式】：
-  必须严格输出为纯 JSON 对象数组，不要包含 Markdown 标记或 \`\`\`json 前缀。
-  示例：
-  [
-    { "name": "李明", "description": "一个高中生男性，17岁，黑色齐刘海短发，身穿蓝白相间的运动校服" },
-    { "name": "王老师", "description": "一个中年女性，45岁，棕色盘发，身穿米色职业套装" }
-  ]
-
-  【剧本内容】：
-  ${safeScript}`;
-
-  const operation = async (ai: GoogleGenAI) => {
-      const response = await ai.models.generateContent({
-          model: settings.textModel,
-          contents: prompt,
-          config: { responseMimeType: 'application/json' }
-      });
-      let text = response.text || "[]";
-      text = text.replace(/```json/g, '').replace(/```/g, '').trim();
-      try {
-        const parsed = JSON.parse(text);
-        if (Array.isArray(parsed)) {
-            return parsed.map((c: any) => ({
-                id: '', 
-                name: c.name || "未知角色",
-                description: c.description || "一个未知角色，外貌模糊"
-            }));
-        }
-        return [];
-      } catch (e) {
-        console.error("Failed to parse roles JSON", text);
-        return [];
-      }
-  };
-
-  return executeWithKeyRotation(settings, operation, "角色分析失败");
-};
-
-/**
- * Infer Batch Prompts
- */
 export const inferBatchPrompts = async (
     scripts: string[],
     allCharacters: Character[],
@@ -311,72 +170,53 @@ export const inferBatchPrompts = async (
     prevContextSummary: string
 ): Promise<{ prompt: string, activeNames: string[] }[]> => {
     
-    // Add a small delay before batch request to prevent burst rate limiting
-    await sleep(500);
+    await sleep(300);
 
     const libContext = allCharacters.length > 0 
-    ? `【可用角色库（必须严格复用以下外貌描述）】：\n${allCharacters.map(c => `- 角色名: "${c.name}" => 外貌描述: "${c.description}"`).join('\n')}`
-    : "【可用角色库】：无";
+    ? `【可用角色库】:\n${allCharacters.map(c => `- ${c.name} (外貌: ${c.description})`).join('\n')}`
+    : "";
 
-    const prompt = `你是一个专业的AI电影分镜师。请分析以下一组连续的剧本分镜（共 ${scripts.length} 行），生成相应的画面描述词。
+    const prompt = `你是一个AI分镜师。根据剧本生成画面描述。
     
     ${libContext}
 
-    【核心指令 - 必须严格遵守】：
-    1. **禁止出现角色名字**：描述词中绝对不能出现“李明”、“小红”等名字，必须用【可用角色库】中的“外貌描述”替换。
-    2. **禁止使用代词**：绝对禁止出现“他”、“她”、“它”、“他们”。必须重复使用完整的角色外貌描述。
-    3. **单人镜头格式**：[角色外貌描述]，[表情]，[动作]，[景别]，[场景]，[色调]。
-       - 例：一个青年男性，20岁，黑色短发，身穿黑色T恤，黑色长裤，表情惊讶，正在奔跑，中景 Medium Shot，街道夜景，赛博朋克霓虹色调。
-    4. **多人镜头格式**：[角色A外貌]，[表情动作]；[角色B外貌]，[表情动作]，[互动细节]，[景别]，[场景]。
-       - 例：一个青年男性，黑色短发，黑色T恤，黑色长裤，表情愤怒，挥舞拳头；一个中年男性，灰色头发，身穿西装，表情恐惧，向后退缩，前者揪住后者的衣领，全景 Wide Shot，办公室，冷色调。
-    5. **角色识别**：在 activeCharacterNames 中列出出场的角色原名。
+    规则：
+    1. **去名化**：描述词中禁止出现“李明”等名字，用外貌描述代替。
+    2. **去代词**：禁止使用“他/她”。
+    3. **格式**：[角色描述]，[动作]，[景别]，[环境]。
+    4. **上文参考**：${prevContextSummary}
 
-    【输出格式】：
-    必须严格输出为纯 JSON 对象数组。
-    键名必须为 "activeCharacterNames" (数组) 和 "prompt" (字符串)。
-    
-    参考上文：${prevContextSummary}
-    
-    待分析剧本：
-    ${scripts.map((s, i) => `分镜${i+1}: ${s}`).join('\n')}
+    任务：为以下 ${scripts.length} 个剧本片段生成描述。
+    ${scripts.map((s, i) => `片段${i}: ${s}`).join('\n')}
+
+    输出格式：
+    纯 JSON 数组：
+    [{"prompt": "描述...", "activeNames": ["角色名"]}]
     `;
 
-    const operation = async (ai: GoogleGenAI) => {
-        const response = await ai.models.generateContent({
-            model: settings.textModel,
-            contents: prompt,
-            config: { responseMimeType: 'application/json' }
-        });
-        let text = response.text || "[]";
-        text = text.replace(/```json/g, '').replace(/```/g, '').trim();
-        
-        try {
-            const json = JSON.parse(text);
+    try {
+        return await executeRequest(settings, async (ai) => {
+            const res = await ai.models.generateContent({
+                model: settings.textModel,
+                contents: prompt,
+                config: { responseMimeType: 'application/json' }
+            });
+            const text = res.text || "[]";
+            const json = extractJSON(text);
             if (Array.isArray(json)) {
                 return json.map((item: any) => ({
                     prompt: item.prompt || "",
-                    activeNames: Array.isArray(item.activeCharacterNames) 
-                        ? item.activeCharacterNames 
-                        : (Array.isArray(item.activeNames) ? item.activeNames : [])
+                    activeNames: item.activeNames || item.activeCharacterNames || []
                 }));
             }
-        } catch (e) {
-            console.error("Batch JSON parse error", e);
-        }
-        return Array(scripts.length).fill({ prompt: "", activeNames: [] });
-    };
-
-    try {
-        return await executeWithKeyRotation(settings, operation, "批量推理失败");
+            return Array(scripts.length).fill({ prompt: "", activeNames: [] });
+        });
     } catch (e) {
         console.error(e);
         return Array(scripts.length).fill({ prompt: "", activeNames: [] });
     }
 };
 
-/**
- * Infer Single Frame Data (Context Aware)
- */
 export const inferFrameData = async (
   currentScript: string,
   allCharacters: Character[],
@@ -384,91 +224,83 @@ export const inferFrameData = async (
   contextBefore: string[] = [], 
   contextAfter: string[] = []
 ): Promise<{ prompt: string, activeNames: string[] }> => {
-  
   const libContext = allCharacters.length > 0 
-    ? `【可用角色库】：\n${allCharacters.map(c => `- ${c.name}: ${c.description}`).join('\n')}`
-    : "【可用角色库】：无";
+    ? `【角色库】:${allCharacters.map(c => `${c.name}(${c.description})`).join(';')}`
+    : "";
 
-  // Improve context presentation to include both script and previous visual prompts
-  // Context is expected to be strings like "[剧本]: xxx; [已有画面]: yyy"
-  const formattedContextBefore = contextBefore.map((c, i) => `上文-${contextBefore.length - i}: ${c}`).join('\n');
-  const formattedContextAfter = contextAfter.map((c, i) => `下文+${i+1}: ${c}`).join('\n');
-
-  const prompt = `你是一个专业的AI电影分镜师。
-  
+  const prompt = `分镜画面生成。
   ${libContext}
+  前文：${contextBefore.join(';')}
+  当前：${currentScript}
+  后文：${contextAfter.join(';')}
   
-  请根据【前文情境】为【当前分镜】生成画面描述词。
-  **一致性要求**：请仔细阅读前文的画面描述，确保当前画面的动作、环境、光影与前文保持连续和逻辑一致。
-  
-  【前文情境】：
-  ${formattedContextBefore || "无"}
-  
-  【当前分镜剧本】：
-  "${currentScript}"
-  
-  【后文预告】：
-  ${formattedContextAfter || "无"}
-  
-  【严格要求】：
-  1. **禁止出现人名**，必须替换为角色外貌描述。
-  2. **禁止使用代词** (他/她/它)。
-  3. **单人格式**：[角色描述]，[表情]，[动作]，[景别]，[场景]，[色调]。
-  4. **多人格式**：[角色A描述]，[动作]；[角色B描述]，[动作]，[互动]，[景别]。
-  
-  输出格式 JSON:
-  {
-    "activeCharacterNames": ["角色名"], 
-    "prompt": "一个青年男性，黑色短发... (此处为生成的完整提示词)"
-  }
+  要求：
+  1. 结合前文保持连贯。
+  2. 禁用人名和代词，用外貌描述。
+  3. 包含景别 (Shot Size)。
+
+  返回 JSON: {"prompt": "...", "activeNames": []}
   `;
 
-  const operation = async (ai: GoogleGenAI) => {
-      const response = await ai.models.generateContent({
-          model: settings.textModel,
-          contents: prompt,
-          config: { responseMimeType: 'application/json' }
-      });
-      let text = response.text || "{}";
-      text = text.replace(/```json/g, '').replace(/```/g, '').trim();
-      const json = JSON.parse(text);
-      return {
-          prompt: json.prompt || "", 
-          activeNames: Array.isArray(json.activeCharacterNames) 
-              ? json.activeCharacterNames 
-              : (Array.isArray(json.activeNames) ? json.activeNames : [])
-      };
-  };
-
-  return executeWithKeyRotation(settings, operation, "推理失败");
-};
-
-/**
- * Breakdown Script
- */
-export const breakdownScript = async (scriptText: string, settings: Settings): Promise<string[]> => {
-  const prompt = `你是一位专业电影导演。请将以下文本智能拆分为单独的分镜脚本。
-  1. 按动作、对话或场景变化进行拆分。
-  2. 保持原文内容，不要改写，只是断句。
-  
-  输出纯 JSON 字符串数组格式：["分镜1内容", "分镜2内容"]。
-  文本：${scriptText}`;
-
-  const operation = async (ai: GoogleGenAI) => {
-      const response = await ai.models.generateContent({
-          model: settings.textModel,
-          contents: prompt,
-          config: { responseMimeType: 'application/json' }
-      });
-      let text = response.text || "[]";
-      text = text.replace(/```json/g, '').replace(/```/g, '').trim();
-      return JSON.parse(text);
-  };
-
   try {
-      return await executeWithKeyRotation(settings, operation, "分镜拆解失败");
+      return await executeRequest(settings, async (ai) => {
+          const res = await ai.models.generateContent({
+              model: settings.textModel,
+              contents: prompt,
+              config: { responseMimeType: 'application/json' }
+          });
+          const json = extractJSON(res.text || "{}");
+          return {
+              prompt: json.prompt || "", 
+              activeNames: json.activeNames || json.activeCharacterNames || []
+          };
+      });
   } catch (e) {
       console.error(e);
-      return scriptText.split('\n').filter(l => l.trim().length > 0);
+      return { prompt: "", activeNames: [] };
+  }
+};
+
+export const analyzeRoles = async (script: string, settings: Settings): Promise<Character[]> => {
+  const prompt = `提取剧本角色。
+  要求：
+  1. description 格式："[年龄][性别]，[发型]，身穿[衣着]"。
+  2. 输出 JSON 数组：[{"name": "...", "description": "..."}]
+  
+  剧本：${script.substring(0, 30000)}`;
+
+  try {
+      return await executeRequest(settings, async (ai) => {
+          const res = await ai.models.generateContent({
+              model: settings.textModel,
+              contents: prompt,
+              config: { responseMimeType: 'application/json' }
+          });
+          const json = extractJSON(res.text || "[]");
+          return Array.isArray(json) ? json.map((c: any) => ({
+             id: '', name: c.name || "Unknown", description: c.description || ""
+          })) : [];
+      });
+  } catch (e) {
+      console.error(e);
+      return [];
+  }
+};
+
+export const breakdownScript = async (scriptText: string, settings: Settings): Promise<string[]> => {
+  const prompt = `拆分剧本为分镜列表。保留原文。输出 JSON 字符串数组。
+  文本：${scriptText.substring(0, 30000)}`;
+
+  try {
+      return await executeRequest(settings, async (ai) => {
+          const res = await ai.models.generateContent({
+              model: settings.textModel,
+              contents: prompt,
+              config: { responseMimeType: 'application/json' }
+          });
+          return extractJSON(res.text || "[]");
+      });
+  } catch (e) {
+      return scriptText.split('\n').filter(l => l.trim());
   }
 };

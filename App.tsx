@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { DraftsList } from './components/DraftsList';
@@ -6,13 +7,14 @@ import { StoryboardEditor } from './components/StoryboardEditor';
 import { SettingsModal } from './components/SettingsModal';
 import { ToastContainer } from './components/Toast';
 import { AdminPanel } from './components/AdminPanel';
+import { AuthModal } from './components/AuthModal';
 import { ViewState, Project, Character, Settings, ToastMessage, GenerationModel } from './types';
 import { storage } from './utils/storage';
 import { parseSRT } from './utils/srtParser';
 import { formatScriptText } from './utils/scriptParser';
+import { Lock, User } from 'lucide-react';
 
 const App: React.FC = () => {
-  // Application State
   const [currentView, setCurrentView] = useState<ViewState>('drafts');
   const [projects, setProjects] = useState<Project[]>([]);
   const [characters, setCharacters] = useState<Character[]>([]);
@@ -21,15 +23,28 @@ const App: React.FC = () => {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [settings, setSettings] = useState<Settings>(storage.getSettings());
   
-  // Admin panel state (Optional: keep if you still want a hidden entry, or remove. I'll remove for now as auth is gone)
+  // Auth State
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
 
-  // Load Data on Mount
   useEffect(() => {
+    checkAuth();
     loadData();
   }, []);
 
+  const checkAuth = () => {
+      const token = storage.getAuthToken();
+      if (token) {
+          setIsAuthenticated(true);
+      } else {
+          setIsAuthenticated(false);
+          setShowAuthModal(true); // Force login on load if not authenticated
+      }
+  };
+
   const loadData = async () => {
+    // Only load data if we have potential auth or local fallback
     const p = await storage.loadProjects();
     setProjects(p);
     const c = await storage.loadCharacters();
@@ -38,7 +53,6 @@ const App: React.FC = () => {
     setSettings(s);
   };
 
-  // Toast Handler
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     const id = Date.now().toString();
     setToasts(prev => [...prev, { id, message, type }]);
@@ -46,6 +60,33 @@ const App: React.FC = () => {
   
   const removeToast = (id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
+  };
+
+  const handleLoginSuccess = () => {
+      setIsAuthenticated(true);
+      setShowAuthModal(false);
+      showToast('登录成功', 'success');
+      // Reload data in case it was isolated by user
+      loadData();
+  };
+
+  const handleFloatingBtnClick = () => {
+      if (!isAuthenticated) {
+          setShowAuthModal(true);
+      } else {
+          const user = storage.getAuthUser();
+          if (user?.type === 'admin') {
+              setIsAdminOpen(true);
+          } else {
+              if (confirm('是否退出登录？')) {
+                  storage.clearAuth();
+                  setIsAuthenticated(false);
+                  setShowAuthModal(true);
+                  setProjects([]);
+                  setCharacters([]);
+              }
+          }
+      }
   };
 
   const handleCreateProject = async (name: string, srtFile: File | null) => {
@@ -79,7 +120,6 @@ const App: React.FC = () => {
       localCharacters: [],
       promptPrefix: '参考图片风格，保持图中角色一致性'
     };
-    // Optimistic UI update
     const updated = [newProject, ...projects];
     setProjects(updated);
     storage.saveSingleProject(newProject);
@@ -154,7 +194,7 @@ const App: React.FC = () => {
     }
 
     return (
-      <div className="flex h-screen bg-[#f8fafc]"> {/* Lighter background */}
+      <div className="flex h-screen bg-[#f8fafc]">
         <div className="relative z-20">
             <Sidebar currentView={currentView} onChangeView={handleViewChange} />
         </div>
@@ -186,7 +226,25 @@ const App: React.FC = () => {
   return (
     <div style={({ '--brand-color': settings.themeColor } as React.CSSProperties)}>
         <ToastContainer toasts={toasts} removeToast={removeToast} />
-        <div>{renderContent()}</div>
+        
+        {/* Auth Lock Overlay - Only if not authenticated and modal closed (rare edge case) or blurred bg behind modal */}
+        {!isAuthenticated && !showAuthModal && (
+            <div className="fixed inset-0 bg-black/50 z-40 flex items-center justify-center backdrop-blur-sm">
+                <div className="text-white font-bold cursor-pointer" onClick={() => setShowAuthModal(true)}>
+                    <Lock size={48} className="mx-auto mb-2"/>
+                    点击解锁
+                </div>
+            </div>
+        )}
+
+        {/* Auth Modal */}
+        {showAuthModal && (
+            <AuthModal onAuthenticated={handleLoginSuccess} />
+        )}
+
+        <div className={`${!isAuthenticated ? 'filter blur-sm pointer-events-none' : ''}`}>
+            {renderContent()}
+        </div>
 
         <SettingsModal 
             isOpen={isSettingsOpen} 
@@ -200,6 +258,19 @@ const App: React.FC = () => {
         />
         
         {isAdminOpen && <AdminPanel onClose={() => setIsAdminOpen(false)} />}
+
+        {/* Floating User Button */}
+        <div className="fixed bottom-6 right-6 z-50">
+            <button 
+                onClick={handleFloatingBtnClick}
+                className={`w-14 h-14 rounded-full shadow-xl flex items-center justify-center transition-all transform hover:scale-105 active:scale-95 ${
+                    isAuthenticated ? 'bg-white text-gray-800 hover:bg-gray-100' : 'bg-[var(--brand-color)] text-white animate-pulse'
+                }`}
+                title={isAuthenticated ? '用户中心/退出' : '点击登录'}
+            >
+                {isAuthenticated ? <User size={24}/> : <Lock size={24}/>}
+            </button>
+        </div>
     </div>
   );
 };

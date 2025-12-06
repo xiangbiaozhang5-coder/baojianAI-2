@@ -7,16 +7,17 @@ export enum GenerationModel {
 }
 
 export const TEXT_MODELS = [
-  { value: 'gemini-3-pro-preview', label: 'Gemini 3.0 Pro Preview' },
-  { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-  { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite' },
+  { value: 'gemini-3.0-pro-preview', label: 'Gemini 3.0 Pro' },
   { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+  { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+  { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+  { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite' },
   { value: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5' },
 ];
 
 export interface Settings {
-  apiKeys: string[]; // Supports rotation
-  baseUrl: string; // Custom Proxy URL
+  apiKey: string; // Changed from apiKeys[] to single string
+  baseUrl: string;
   textModel: string;
   imageModel: GenerationModel;
   jianYingPath: string;
@@ -27,14 +28,14 @@ export interface Settings {
 export interface Character {
   id: string;
   name: string;
-  description: string; // 角色外貌描述
-  referenceImage?: string; // Base64
+  description: string;
+  referenceImage?: string;
 }
 
 export interface StyleReference {
   id: string;
   name: string;
-  imageUrl: string; // Base64
+  imageUrl: string;
 }
 
 export interface Project {
@@ -43,26 +44,26 @@ export interface Project {
   createdAt: number;
   updatedAt: number;
   status: '草稿' | '生成中' | '已完成';
-  localCharacters: Character[]; // 故事专用角色库
-  styles?: StyleReference[]; // 故事专用风格库
-  activeStyleId?: string; // 当前激活的风格ID
+  localCharacters: Character[];
+  styles?: StyleReference[];
+  activeStyleId?: string;
   frames: StoryboardFrame[];
-  promptPrefix?: string; // 全局画面描述词前缀
+  promptPrefix?: string;
 }
 
 export interface StoryboardFrame {
   id: string;
-  scriptContent: string; // Row 1: 剧本/分镜内容
-  visualPrompt?: string; // Row 2: 画面描述词
-  characterIds: string[]; // Row 3: 关联角色ID
-  imageUrl?: string; // Row 4: 图片
-  isMirrored?: boolean; // 图片镜像状态
-  isHD?: boolean; // 是否高清
+  scriptContent: string;
+  visualPrompt?: string;
+  characterIds: string[];
+  imageUrl?: string;
+  isMirrored?: boolean;
+  isHD?: boolean;
   aspectRatio: AspectRatio;
   model: GenerationModel;
-  startTime?: string; // SRT Timecode
+  startTime?: string;
   endTime?: string;
-  selected?: boolean; // UI Selection state
+  selected?: boolean;
 }
 
 export type ViewState = 'drafts' | 'characters' | 'settings' | 'editor';
@@ -71,4 +72,9 @@ export interface ToastMessage {
   id: string;
   message: string;
   type: 'success' | 'error' | 'info';
+}
+
+export interface AuthUser {
+  type: 'admin' | 'user' | 'vip';
+  expiresAt: number;
 }
