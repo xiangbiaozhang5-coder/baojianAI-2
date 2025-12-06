@@ -428,8 +428,15 @@ export const StoryboardEditor: React.FC<StoryboardEditorProps> = ({
 
   const handleSingleInfer = (index: number) => {
       const frame = frames[index];
-      const prevContext = frames.slice(Math.max(0, index - 5), index).map(f => f.scriptContent);
-      const nextContext = frames.slice(index + 1, Math.min(frames.length, index + 4)).map(f => f.scriptContent);
+      
+      // Construct context including previous visual prompts if available for better consistency
+      const prevContext = frames
+          .slice(Math.max(0, index - 5), index)
+          .map(f => f.visualPrompt ? `[剧本]:${f.scriptContent} -> [已有画面]:${f.visualPrompt}` : `[剧本]:${f.scriptContent}`);
+      
+      const nextContext = frames
+          .slice(index + 1, Math.min(frames.length, index + 4))
+          .map(f => f.scriptContent);
       
       setInferringFrameIds(prev => new Set(prev).add(frame.id));
       
