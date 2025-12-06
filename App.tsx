@@ -1,10 +1,10 @@
+
 import React, { useState, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { DraftsList } from './components/DraftsList';
 import { CharacterLibrary } from './components/CharacterLibrary';
 import { StoryboardEditor } from './components/StoryboardEditor';
 import { SettingsModal } from './components/SettingsModal';
-import { AuthModal } from './components/AuthModal';
 import { ToastContainer } from './components/Toast';
 import { ViewState, Project, Character, Settings, ToastMessage, GenerationModel } from './types';
 import { storage } from './utils/storage';
@@ -21,9 +21,6 @@ const App: React.FC = () => {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [settings, setSettings] = useState<Settings>(storage.getSettings());
   
-  // Auth State: If apiKeys is empty, user is not authenticated/configured
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-
   // Initialize from storage
   useEffect(() => {
     setProjects(storage.getProjects());
@@ -31,11 +28,13 @@ const App: React.FC = () => {
     const currentSettings = storage.getSettings();
     setSettings(currentSettings);
     
-    // Check if we have valid keys
-    if (currentSettings.apiKeys && currentSettings.apiKeys.length > 0) {
-        setIsAuthenticated(true);
-    } else {
-        setIsAuthenticated(false);
+    // If no keys are configured, open settings automatically to guide user
+    if (!currentSettings.apiKeys || currentSettings.apiKeys.length === 0) {
+        // Short delay to allow UI to mount
+        setTimeout(() => {
+            setIsSettingsOpen(true);
+            showToast('请先在设置中配置 API Key 和代理地址', 'info');
+        }, 500);
     }
   }, []);
 
@@ -47,15 +46,6 @@ const App: React.FC = () => {
   
   const removeToast = (id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
-  };
-
-  // Handlers
-  const handleAuthenticated = () => {
-      // Refresh settings to get the key saved by AuthModal
-      const newSettings = storage.getSettings();
-      setSettings(newSettings);
-      setIsAuthenticated(true);
-      showToast("验证通过，欢迎使用", "success");
   };
 
   const handleCreateProject = async (name: string, srtFile: File | null) => {
@@ -198,11 +188,8 @@ const App: React.FC = () => {
     <div style={({ '--brand-color': settings.themeColor } as React.CSSProperties)}>
         <ToastContainer toasts={toasts} removeToast={removeToast} />
         
-        {/* Gatekeeper Modal */}
-        {!isAuthenticated && <AuthModal onAuthenticated={handleAuthenticated} />}
-
-        {/* Main App (Blurred if not authenticated) */}
-        <div className={!isAuthenticated ? 'filter blur-sm pointer-events-none h-screen overflow-hidden' : ''}>
+        {/* Main App */}
+        <div>
             {renderContent()}
         </div>
 

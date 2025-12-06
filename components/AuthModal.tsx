@@ -26,11 +26,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onAuthenticated }) => {
     setSuccessMsg('');
 
     try {
-        await testApiConnection(apiKey);
+        const currentSettings = storage.getSettings();
+        await testApiConnection(apiKey, currentSettings.baseUrl);
         setSuccessMsg('连接成功！正在进入系统...');
         
         // Save to storage
-        const currentSettings = storage.getSettings();
         const newSettings: Settings = {
             ...currentSettings,
             apiKeys: [apiKey.trim()]

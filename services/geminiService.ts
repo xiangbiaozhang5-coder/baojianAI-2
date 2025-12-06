@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { GenerationModel, Settings, Character } from "../types";
 
@@ -8,18 +7,49 @@ const formatError = (error: any, context: string): string => {
   
   if (msg.includes('401')) msg = 'API Key 无效或未授权 (401)';
   else if (msg.includes('403')) msg = 'API Key 权限不足 (403)';
-  else if (msg.includes('404')) msg = '请求的模型不存在 (404)';
+  else if (msg.includes('404')) msg = '请求的模型不存在或代理地址错误 (404)';
   else if (msg.includes('429')) msg = '请求过于频繁/额度耗尽 (429)';
   else if (msg.includes('500')) msg = 'AI 服务内部错误 (500)';
   else if (msg.includes('503')) msg = '服务暂时不可用 (503)';
-  else if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) msg = '网络连接失败 (检查网络)';
+  else if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) msg = '网络连接失败 (检查网络/代理配置)';
   
   return `${context}: ${msg}`;
 };
 
+// Helper: Sleep delay
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Helper: Retry with Exponential Backoff
+const retryOperation = async <T>(
+    operation: () => Promise<T>, 
+    maxRetries: number = 3,
+    baseDelay: number = 2000
+): Promise<T> => {
+    let lastError: any;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            return await operation();
+        } catch (error: any) {
+            lastError = error;
+            const msg = error.message || String(error);
+            // Only retry on transient errors or rate limits
+            if (msg.includes('429') || msg.includes('503') || msg.includes('Quota exceeded')) {
+                if (attempt < maxRetries) {
+                    const waitTime = baseDelay * Math.pow(2, attempt); // 2s, 4s, 8s
+                    console.warn(`Hit rate limit (429/503). Retrying in ${waitTime}ms... (Attempt ${attempt + 1}/${maxRetries})`);
+                    await sleep(waitTime);
+                    continue;
+                }
+            }
+            throw error;
+        }
+    }
+    throw lastError;
+};
+
 /**
- * Execute an API operation with Automatic Key Rotation
- * If a key fails with 429 (Quota) or 401/403 (Auth), it switches to the next key.
+ * Execute an API operation with Automatic Key Rotation AND Retry Logic
  */
 const executeWithKeyRotation = async <T>(
     settings: Settings, 
@@ -39,9 +69,16 @@ const executeWithKeyRotation = async <T>(
         if (!key.trim()) continue;
 
         try {
-            // Official API Only - No baseUrl passed
-            const ai = new GoogleGenAI({ apiKey: key });
-            return await operation(ai);
+            // Apply Custom Proxy URL (baseUrl)
+            // Note: We cast to any to support baseUrl injection if type definitions are strict
+            const ai = new GoogleGenAI({ 
+                apiKey: key,
+                baseUrl: settings.baseUrl 
+            } as any);
+            
+            // Wrap the specific AI call in a retry block (Handling 429s for THIS key)
+            return await retryOperation(() => operation(ai));
+
         } catch (error: any) {
             lastError = error;
             const msg = error.message || String(error);
@@ -50,22 +87,12 @@ const executeWithKeyRotation = async <T>(
 
             if (isQuotaError || isAuthError) {
                 console.warn(`Key ending in ...${key.slice(-4)} failed (${isQuotaError ? 'Quota' : 'Auth'}). Switching to next key...`);
-                // If this is the last key, we can't rotate, so we throw (or maybe let loop finish)
+                
                 if (i === keys.length - 1) {
                     break;
                 }
-                // Continue to next iteration (next key)
                 continue; 
-            } else if (msg.includes('503')) {
-                // For 503 Service Unavailable, we might want to retry SAME key or rotate.
-                // Standard logic: 503 is temporary, maybe retry once? 
-                // For simplicity here, we treat 503 as a system error and don't rotate immediately unless we want high availability.
-                // Let's rotate for 503 too just in case it's per-shard limit.
-                console.warn(`Key ending in ...${key.slice(-4)} hit 503. Switching...`);
-                 if (i === keys.length - 1) break;
-                 continue;
             } else {
-                // For other errors (validation, 400, etc.), rotation won't help. Throw immediately.
                 throw error;
             }
         }
@@ -73,16 +100,19 @@ const executeWithKeyRotation = async <T>(
 
     const errorMsg = formatError(lastError, contextName);
     console.error(errorMsg);
-    throw new Error(`${errorMsg} (已尝试所有可用 Key)`);
+    throw new Error(`${errorMsg} (已重试并尝试所有可用 Key)`);
 };
 
 /**
- * Test API Connection (Single Key)
+ * Test API Connection (Single Key + URL)
  */
-export const testApiConnection = async (apiKey: string, model: string = 'gemini-2.5-flash'): Promise<boolean> => {
+export const testApiConnection = async (apiKey: string, baseUrl: string, model: string = 'gemini-2.5-flash'): Promise<boolean> => {
   if (!apiKey || !apiKey.trim()) throw new Error("API Key 为空");
   
-  const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
+  const ai = new GoogleGenAI({ 
+      apiKey: apiKey.trim(),
+      baseUrl: baseUrl
+  } as any);
   
   try {
       await ai.models.generateContent({
@@ -111,11 +141,9 @@ export const generateImage = async (
 
   const operation = async (ai: GoogleGenAI) => {
     const parts: any[] = [];
-    
-    // Construct Instructions based on available inputs
     let systemText = "";
 
-    // 1. Add Style Image (First priority for visual style)
+    // 1. Add Style Image
     if (styleImageBase64) {
       const base64Data = styleImageBase64.replace(/^data:image\/\w+;base64,/, "");
       parts.push({
@@ -168,7 +196,6 @@ export const generateImage = async (
  * Analyze Script for Roles
  */
 export const analyzeRoles = async (script: string, settings: Settings): Promise<Character[]> => {
-  // Truncate script if extremely long to prevent token overflow, though Gemini has large context.
   const safeScript = script.length > 50000 ? script.substring(0, 50000) + "...(truncated)" : script;
 
   const prompt = `你是一个专业的电影选角导演。请分析以下剧本内容，提取所有主要出现的角色。
@@ -198,13 +225,12 @@ export const analyzeRoles = async (script: string, settings: Settings): Promise<
           config: { responseMimeType: 'application/json' }
       });
       let text = response.text || "[]";
-      // Cleanup markdown just in case the model ignores the instruction
       text = text.replace(/```json/g, '').replace(/```/g, '').trim();
       try {
         const parsed = JSON.parse(text);
         if (Array.isArray(parsed)) {
             return parsed.map((c: any) => ({
-                id: '', // Placeholder, will be generated by UI
+                id: '', 
                 name: c.name || "未知角色",
                 description: c.description || "一个未知角色，外貌模糊"
             }));
@@ -229,6 +255,9 @@ export const inferBatchPrompts = async (
     prevContextSummary: string
 ): Promise<{ prompt: string, activeNames: string[] }[]> => {
     
+    // Add a small delay before batch request to prevent burst rate limiting
+    await sleep(500);
+
     const libContext = allCharacters.length > 0 
     ? `【可用角色库（必须严格复用以下外貌描述）】：\n${allCharacters.map(c => `- 角色名: "${c.name}" => 外貌描述: "${c.description}"`).join('\n')}`
     : "【可用角色库】：无";

@@ -16,7 +16,7 @@ export const TEXT_MODELS = [
 
 export interface Settings {
   apiKeys: string[]; // Supports rotation
-  // baseUrl removed - Enforce Official API
+  baseUrl: string; // Custom Proxy URL
   textModel: string;
   imageModel: GenerationModel;
   jianYingPath: string;

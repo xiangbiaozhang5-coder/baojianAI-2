@@ -1,3 +1,4 @@
+
 import { Project, Character, Settings, GenerationModel } from '../types';
 
 const KEYS = {
@@ -7,8 +8,9 @@ const KEYS = {
 };
 
 const DEFAULT_SETTINGS: Settings = {
-  apiKeys: [], // Empty by default, triggers AuthModal
-  textModel: 'gemini-3-pro-preview',
+  apiKeys: [], 
+  baseUrl: 'https://generativelanguage.googleapis.com', // Default to Official
+  textModel: 'gemini-2.5-flash', 
   imageModel: GenerationModel.GEMINI_2_5_FLASH_IMAGE,
   jianYingPath: 'C:/Users/Admin/AppData/Local/JianYingPro/User Data/Projects/',
   outputImgPath: 'D:/AI_Output/',
@@ -42,11 +44,12 @@ export const storage = {
         delete parsed.apiKey;
     }
     
-    // Cleanup: Remove baseUrl if present from legacy
-    if (parsed.baseUrl) {
-        delete parsed.baseUrl;
+    // Ensure baseUrl exists
+    if (!parsed.baseUrl) {
+        parsed.baseUrl = DEFAULT_SETTINGS.baseUrl;
     }
 
+    // Merge with defaults to ensure new fields exist
     return { ...DEFAULT_SETTINGS, ...parsed };
   },
   saveSettings: (settings: Settings) => {
